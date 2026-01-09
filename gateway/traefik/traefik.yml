@@ -5,3 +5,9 @@ entryPoints:
 providers:
   file:
     filename: /etc/traefik/dynamic.yml
+
+experimental:
+  plugins:
+    clusterRatelimit:
+      moduleName: "github.com/nzin/traefik-cluster-ratelimit"
+      version: "v1.2.0"

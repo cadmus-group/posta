@@ -9,8 +9,7 @@ This repo is meant to be **deployed per-project** (separate servers / namespaces
 
 ### Edge / Gateway
 - **Traefik** as the HTTP entrypoint (`:8080`)
-- **Distributed rate limiting (cluster-wide) via Redis** using the `traefik-cluster-ratelimit` plugin  
-  (Traefik’s built-in rate limit middleware is per-instance; the plugin shares state across replicas via Redis).
+- **Distributed rate limiting (cluster-wide) via Redis** using Traefik’s built-in `rateLimit` with Redis storage.
 
 ### Jobs / Background processing
 - **queue-api**: small HTTP service that accepts enqueue requests and pushes tasks into Asynq (Redis)
@@ -41,6 +40,7 @@ docker compose -f deploy/docker-compose/dev.yml up --build
 ### Local endpoints
 - **Gateway (Traefik)**: `http://localhost:8080`
 - **Health** (through gateway → queue-api): `http://localhost:8080/health`
+- **Readiness** (Redis ping): `http://localhost:8080/ready`
 - **asynqmon UI**: `http://localhost:8082`
 - **Redis**: `localhost:6379` (exposed for debugging)
 
@@ -48,6 +48,7 @@ docker compose -f deploy/docker-compose/dev.yml up --build
 ```bash
 curl -sS http://localhost:8080/v1/enqueue \
   -H 'content-type: application/json' \
+  # add: -H "X-Edge-Token: <token>" if ENQUEUE_AUTH_TOKEN is set
   -d '{"type":"example:ping","queue":"default","payload":{"ok":true}}'
 ```
 
@@ -153,6 +154,8 @@ curl -sS http://localhost:8080/v1/enqueue \
 
 ### Environment variables (services)
 
+Copy `.env.example` to `.env` and adjust for your environment. The defaults are safe for local dev; production should set Redis auth and an enqueue auth token.
+
 Used by `queue-api`, `worker`, `scheduler`:
 
 | Variable | Default | Notes |
@@ -160,6 +163,9 @@ Used by `queue-api`, `worker`, `scheduler`:
 | `REDIS_ADDR` | `redis:6379` | Redis host:port |
 | `REDIS_PASSWORD` | empty | Set if Redis requires auth |
 | `REDIS_DB` | `0` | Redis DB index |
+| `REDIS_DIAL_TIMEOUT_MS` | `2000` | Redis dial timeout (ms) |
+| `REDIS_READ_TIMEOUT_MS` | `1000` | Redis read timeout (ms) |
+| `REDIS_WRITE_TIMEOUT_MS` | `1000` | Redis write timeout (ms) |
 
 queue-api:
 
@@ -168,6 +174,9 @@ queue-api:
 | `HTTP_ADDR` | `:8081` | Bind address |
 | `HTTP_MAX_BODY_BYTES` | `1048576` | Request size limit |
 | `HTTP_READ_HEADER_TIMEOUT_MS` | `5000` | Defensive timeout |
+| `ENQUEUE_AUTH_TOKEN` | empty | If set, /v1/enqueue requires `X-Edge-Token` (or `Authorization: Bearer ...`) |
+| `QUEUE_ALLOWLIST` | `default,critical` | Allowed queues for enqueue API |
+| `REDIS_PING_TIMEOUT_MS` | `1500` | Timeout for readiness Redis ping |
 
 worker:
 
@@ -183,13 +192,11 @@ worker:
 
 ## Rate limiting (cluster-wide, Redis-backed)
 
-### Why a plugin?
-Traefik’s default rate limiter does **not** share state across multiple Traefik instances (HA/K8s).
-We use a Redis-backed plugin so limits apply cluster-wide.
+Traefik’s built-in `rateLimit` middleware is configured to store counters in Redis so limits stay consistent across replicas.
 
 ### Where to configure it
-- `gateway/traefik/traefik.yml` — static config (enables plugin)
-- `gateway/traefik/dynamic.yml` — routes and middleware config
+- `gateway/traefik/traefik.yml` — static config
+- `gateway/traefik/dynamic.yml` — routes and middleware config (rate limit, redis address)
 
 ### Tuning
 Edit `gateway/traefik/dynamic.yml` and adjust:
@@ -232,6 +239,13 @@ curl -sS http://localhost:8080/v1/enqueue \
 
 Open: `http://localhost:8082`
 
+### 5) Automated smoke test
+```bash
+chmod +x scripts/smoke.sh
+./scripts/smoke.sh
+SMOKE_ENABLE_AUTH=1 ENQUEUE_AUTH_TOKEN=dev-token ./scripts/smoke.sh  # also verifies auth path
+```
+
 ---
 
 ## Deploying (containers) — per project server (VPS / bare metal)
@@ -273,7 +287,7 @@ Take `deploy/docker-compose/dev.yml` and create a `prod.yml`:
 ### Scaling rules
 - Scale **workers** for throughput.
 - Keep **scheduler** at 1 replica (unless you implement leader election, otherwise you’ll double-enqueue).
-- If you run multiple Traefik replicas, keep rate limiting **Redis-backed** (plugin) to prevent per-pod unfairness.
+- If you run multiple Traefik replicas, keep rate limiting **Redis-backed** to prevent per-pod unfairness.
 
 ### Project isolation (multi-project in one cluster)
 Pick one:
@@ -288,9 +302,9 @@ Pick one:
 Out of the box, this skeleton is intentionally minimal.
 
 Before production:
-- Put `queue-api` behind auth (JWT/mTLS/API keys)
+- Put `queue-api` behind auth (use `ENQUEUE_AUTH_TOKEN` for a simple token gate; prefer JWT/mTLS/API keys in production)
 - Rate limit by tenant key, not IP
-- Validate task types and payload schema (whitelist allowed types)
+- Validate task types and payload schema (whitelist allowed types — enforced in `/v1/enqueue`)
 - Apply network policies so only internal services can enqueue
 - Log and audit enqueue calls (request-id, tenant-id, task type)
 
@@ -298,9 +312,9 @@ Before production:
 
 ## Troubleshooting
 
-### Traefik plugin not loading
-- Ensure the plugin is enabled in `gateway/traefik/traefik.yml` under `experimental.plugins`.
-- Confirm your Traefik image supports plugins and you’re not running with plugin restrictions.
+### Traefik rate limit not applying
+- Confirm `gateway/traefik/dynamic.yml` is mounted and includes the `rl` middleware.
+- Check that Redis is reachable from Traefik (same Redis used by the app).
 - Check Traefik logs in compose:
 ```bash
 docker compose -f deploy/docker-compose/dev.yml logs -f traefik
@@ -329,8 +343,8 @@ docker compose -f deploy/docker-compose/dev.yml logs -f asynqmon
 ---
 
 ## Roadmap (next hardening steps)
-- [ ] Add auth + tenant enforcement to queue-api
-- [ ] Add request validation/whitelist for task types
+- [x] Add auth + tenant enforcement to queue-api (token gate)
+- [x] Add request validation/whitelist for task types
 - [ ] Add Prometheus metrics + dashboards
 - [ ] Add tracing (OpenTelemetry)
 - [ ] Add Helm chart (umbrella + per-project values)

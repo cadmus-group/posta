@@ -1,10 +1,18 @@
 services:
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    env_file: .env
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379" # dev only
+
 
   traefik:
     image: traefik:v3.2
+    env_file: .env
     ports:
       - "8080:8080"
     volumes:
@@ -16,25 +24,36 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile.queue-api
+    env_file: .env
     environment:
       - HTTP_ADDR=:8081
       - REDIS_ADDR=redis:6379
+      - ENQUEUE_AUTH_TOKEN=${ENQUEUE_AUTH_TOKEN:-}
+      - QUEUE_ALLOWLIST=${QUEUE_ALLOWLIST:-}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
     depends_on: [redis]
 
   worker:
     build:
       context: ../..
       dockerfile: Dockerfile.worker
+    env_file: .env
     environment:
       - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
     depends_on: [redis]
 
   scheduler:
     build:
       context: ../..
       dockerfile: Dockerfile.scheduler
+    env_file: .env
     environment:
       - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
     depends_on: [redis]
 
   asynqmon:
@@ -42,3 +61,6 @@ services:
     ports: ["8082:8080"]
     command: ["--redis-addr=redis:6379"]
     depends_on: [redis]
+
+volumes:
+  redis-data:

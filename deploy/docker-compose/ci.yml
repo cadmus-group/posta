@@ -1,0 +1,5 @@
+services:
+  queue-api:
+    environment:
+      - ENQUEUE_AUTH_TOKEN=${ENQUEUE_AUTH_TOKEN:-smoke-ci-token}
+

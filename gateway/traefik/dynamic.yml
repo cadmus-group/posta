@@ -14,7 +14,11 @@ http:
 
   middlewares:
     rl:
-      rateLimit:
-        average: 20
-        period: 1s
-        burst: 40
+      plugin:
+        clusterRatelimit:
+          average: 20
+          burst: 40
+          period: 1
+          redisAddress: "redis:6379"
+          redisPassword: "$REDIS_PASSWORD"
+          redisDb: 0
