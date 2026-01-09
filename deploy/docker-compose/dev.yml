@@ -1,0 +1,44 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  traefik:
+    image: traefik:v3.2
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../../gateway/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ../../gateway/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    depends_on: [redis, queue-api]
+
+  queue-api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.queue-api
+    environment:
+      - HTTP_ADDR=:8081
+      - REDIS_ADDR=redis:6379
+    depends_on: [redis]
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.worker
+    environment:
+      - REDIS_ADDR=redis:6379
+    depends_on: [redis]
+
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.scheduler
+    environment:
+      - REDIS_ADDR=redis:6379
+    depends_on: [redis]
+
+  asynqmon:
+    image: hibiken/asynqmon
+    ports: ["8082:8080"]
+    command: ["--redis-addr=redis:6379"]
+    depends_on: [redis]

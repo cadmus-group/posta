@@ -1,0 +1,24 @@
+http:
+  routers:
+    queue-api:
+      rule: "PathPrefix(`/`)"
+      entryPoints: ["web"]
+      service: queue-api
+      middlewares: ["rl"]
+
+  services:
+    queue-api:
+      loadBalancer:
+        servers:
+          - url: "http://queue-api:8081"
+
+  middlewares:
+    rl:
+      rateLimit:
+        average: 20
+        period: 1s
+        burst: 40
+        redis:
+          endpoints:
+            - "redis:6379"
+          db: 0
