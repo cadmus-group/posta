@@ -1,0 +1,42 @@
+# Binaries and build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go module workspace and vendor caches
+go.work
+vendor/
+pkg/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Coverage and profiling
+coverage.out
+*.cov
+*.coverprofile
+*.pprof
+*.prof
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# IDE/editor settings
+.idea/
+.vscode/
+*.code-workspace
+
