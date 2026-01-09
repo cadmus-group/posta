@@ -18,7 +18,3 @@ http:
         average: 20
         period: 1s
         burst: 40
-        redis:
-          endpoints:
-            - "redis:6379"
-          db: 0
