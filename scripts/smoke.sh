@@ -42,21 +42,32 @@ if [[ -n "${ENQUEUE_AUTH_TOKEN:-}" ]]; then
 	AUTH_HEADERS+=("-H" "X-Edge-Token: ${ENQUEUE_AUTH_TOKEN}")
 fi
 
-enqueue_payload='{"type":"example:ping"}'
-curl -fsS -X POST -H "Content-Type: application/json" "${AUTH_HEADERS[@]}" \
-	-d "${enqueue_payload}" "${BASE_URL}/v1/enqueue" >/tmp/posta-enqueue.json
+enqueue_payload="${SMOKE_ENQUEUE_PAYLOAD:-}"
 
-for i in {1..20}; do
-	if docker compose "${COMPOSE_FILES[@]}" logs worker --since 30s | grep -q "handled ping"; then
-		echo "worker processed ping"
-		break
-	fi
-	if [[ $i -eq 20 ]]; then
-		echo "worker did not process ping" >&2
+if [[ -n "${enqueue_payload}" ]]; then
+	status="$(curl -s -o /tmp/posta-enqueue.json -w "%{http_code}" -X POST -H "Content-Type: application/json" \
+		"${AUTH_HEADERS[@]}" -d "${enqueue_payload}" "${BASE_URL}/v1/enqueue")"
+	if [[ "${status}" -ne 200 ]]; then
+		echo "enqueue failed (status ${status})" >&2
 		exit 1
 	fi
-	sleep 2
-done
+
+	if [[ -n "${SMOKE_EXPECT_LOG:-}" ]]; then
+		for i in {1..20}; do
+			if docker compose "${COMPOSE_FILES[@]}" logs worker --since 30s | grep -q -- "${SMOKE_EXPECT_LOG}"; then
+				echo "worker log matched '${SMOKE_EXPECT_LOG}'"
+				break
+			fi
+			if [[ $i -eq 20 ]]; then
+				echo "worker log did not contain '${SMOKE_EXPECT_LOG}'" >&2
+				exit 1
+			fi
+			sleep 2
+		done
+	fi
+else
+	echo "skipping enqueue check (SMOKE_ENQUEUE_PAYLOAD not set)"
+fi
 
 statuses="$(seq 1 80 | xargs -n1 -P16 -I{} curl -o /dev/null -w "%{http_code}\n" -s "${BASE_URL}/health")"
 if ! echo "${statuses}" | grep -q "429"; then
@@ -64,7 +75,7 @@ if ! echo "${statuses}" | grep -q "429"; then
 	exit 1
 fi
 
-if [[ -n "${ENQUEUE_AUTH_TOKEN:-}" ]]; then
+if [[ -n "${enqueue_payload}" && -n "${ENQUEUE_AUTH_TOKEN:-}" ]]; then
 	status_without="$(curl -o /dev/null -w "%{http_code}" -s -X POST -H "Content-Type: application/json" \
 		-d "${enqueue_payload}" "${BASE_URL}/v1/enqueue")"
 	if [[ "${status_without}" -ne 401 ]]; then

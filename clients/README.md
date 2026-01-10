@@ -16,8 +16,8 @@ Output: `clients/typescript-fetch/` (not committed by default).
 import { enqueue } from "./ts/minimal";
 
 await enqueue("https://queue-api.internal", {
-  type: "example:ping",
-  payload: { ok: true },
+  type: "billing:sync",
+  payload: { accountId: "acc_123" },
 }, { token: process.env.QUEUE_API_TOKEN });
 ```
 

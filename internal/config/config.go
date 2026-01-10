@@ -44,9 +44,6 @@ type Config struct {
 	RedisReadTimeout  time.Duration
 	RedisWriteTimeout time.Duration
 	RedisPingTimeout  time.Duration
-
-	// scheduler toggles
-	SchedulerEnableDemoJobs bool
 }
 
 // LoadWithPrefix reads configuration using the provided service prefix (e.g., "QUEUE_API", "WORKER", "SCHEDULER").
@@ -82,8 +79,7 @@ func LoadWithPrefix(prefix string) Config {
 	queuesDefault := []string{cfg.QueueDefault, cfg.QueueCritical}
 	cfg.QueueAllowList = getEnvListAny(prefix, []string{"EDGE_ALLOWED_QUEUES", "QUEUE_ALLOWLIST"}, queuesDefault)
 	cfg.AllowedTaskTypes = getEnvListAny(prefix, []string{"EDGE_ALLOWED_TASK_TYPES"}, nil)
-	cfg.Modules = getEnvListAny(prefix, []string{"EDGE_MODULES"}, []string{"demo"})
-	cfg.SchedulerEnableDemoJobs = getEnvBoolAny(prefix, []string{"SCHEDULER_ENABLE_DEMO_JOBS"}, false)
+	cfg.Modules = getEnvListAny(prefix, []string{"EDGE_MODULES"}, nil)
 
 	return cfg
 }

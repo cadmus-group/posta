@@ -8,7 +8,6 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/cadmus-group/posta/internal/queue"
-	demomod "github.com/cadmus-group/posta/modules/demo"
 )
 
 type moduleSpec struct {
@@ -16,12 +15,7 @@ type moduleSpec struct {
 	registerSchedules func(log *slog.Logger, s *asynq.Scheduler, defaultQueue string) error
 }
 
-var moduleCatalog = map[string]moduleSpec{
-	"demo": {
-		registerTasks:     demomod.Register,
-		registerSchedules: demomod.RegisterSchedules,
-	},
-}
+var moduleCatalog = map[string]moduleSpec{}
 
 // BuildRegistry loads modules and optionally filters to the allowed task types list.
 func BuildRegistry(modules []string, allowedTaskTypes []string, log *slog.Logger) (*queue.Registry, error) {

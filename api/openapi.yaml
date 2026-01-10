@@ -77,22 +77,21 @@ paths:
             schema:
               $ref: '#/components/schemas/EnqueueRequest'
             examples:
-              ping:
-                summary: Ping task
+              billingSync:
+                summary: Billing sync task
                 value:
-                  type: example:ping
+                  type: billing:sync
                   queue: default
                   payload:
-                    ok: true
-              sendEmail:
-                summary: Email task
+                    accountId: acc_123
+              notify:
+                summary: Notification task
                 value:
-                  type: example:send_email
+                  type: notifications:send
                   queue: default
                   payload:
-                    to: dev@cadmus
-                    subject: Hello
-                    body: Hello from Posta
+                    userId: user_123
+                    template: welcome
       responses:
         '200':
           description: Enqueued
@@ -146,7 +145,7 @@ components:
           type: string
           minLength: 1
           description: Registered task type
-          example: example:ping
+          example: billing:sync
         queue:
           type: string
           description: Queue name (defaults to configured default)

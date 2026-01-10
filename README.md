@@ -20,6 +20,20 @@ This repo is meant to be **deployed per-project** (separate servers / namespaces
 ### Local dev
 - `deploy/docker-compose/dev.yml` boots everything: Redis + Traefik + services + asynqmon
 
+## Architecture
+
+```mermaid
+flowchart LR
+  client[Clients / services] --> traefik[Traefik gateway]
+  traefik -->|/v1/enqueue| queueapi[queue-api]
+  scheduler[Scheduler] -->|cron enqueue| redis[(Redis + Asynq)]
+  queueapi -->|enqueue| redis
+  worker[Worker] -->|pull & execute| redis
+  asynqmon[asynqmon UI] -->|inspect| redis
+```
+
+queue-api and worker share a module-backed registry: the API validates payloads before enqueueing, the worker executes the registered handlers, and the scheduler can enqueue recurring tasks from the same modules.
+
 ---
 
 ## Requirements
@@ -30,6 +44,8 @@ This repo is meant to be **deployed per-project** (separate servers / namespaces
 ---
 
 ## Quick start (local)
+
+> This skeleton ships **without built-in tasks**. Add at least one module under `internal/modules/` and set `EDGE_MODULES` (comma-separated) for queue-api, worker, and scheduler. Without modules, `/v1/enqueue` will return `unknown_task`.
 
 From repo root:
 
@@ -46,18 +62,12 @@ docker compose -f deploy/docker-compose/dev.yml up --build
 - **Redis**: `localhost:6379` (exposed for debugging)
 
 ### Enqueue a task (through Traefik)
+Replace the `type`/`queue` values with one of your registered modules.
 ```bash
 curl -sS http://localhost:8080/v1/enqueue \
   -H 'content-type: application/json' \
   # add: -H "X-Edge-Token: <token>" if ENQUEUE_AUTH_TOKEN is set
-  -d '{"type":"example:ping","queue":"default","payload":{"ok":true}}'
-```
-
-### Enqueue example email task
-```bash
-curl -sS http://localhost:8080/v1/enqueue \
-  -H 'content-type: application/json' \
-  -d '{"type":"example:send_email","queue":"default","payload":{"to":"dev@cadmus","subject":"hi","body":"yo"}}'
+  -d '{"type":"billing:sync","queue":"default","payload":{"accountId":"acc_123"}}'
 ```
 
 ---
@@ -112,42 +122,62 @@ Do not put irreversible side effects without idempotency keys (e.g., “charge c
 
 ---
 
-## Adding a new task type (Cadmus convention)
+## Authoring task modules
 
-### 1) Define type + payload schema
-Edit: `internal/queue/tasks.go`
+Task types, validators, handlers, and schedules live in **modules** loaded at startup. queue-api uses the registry to validate payloads before enqueueing; worker uses the same registry to dispatch handlers; scheduler loads the same modules to register recurring tasks.
+
+1. Create a package under `modules/<name>/` with `Register` (and optionally `RegisterSchedules`).
+2. Add an entry to `moduleCatalog` in `internal/modules/loader.go` pointing at your module.
+3. Set `EDGE_MODULES=<name>[,<name2>...]` for queue-api, worker, and scheduler. Optionally tighten with `EDGE_ALLOWED_TASK_TYPES`.
+
+Example module (`modules/billing/register.go`):
 
 ```go
+package billing
+
+import (
+  "context"
+  "encoding/json"
+  "errors"
+  "log/slog"
+
+  "github.com/hibiken/asynq"
+
+  "github.com/cadmus-group/posta/internal/queue"
+)
+
 const TypeBillingSync = "billing:sync"
 
-type BillingSyncPayload struct {
-  AccountID string `json:"accountId"`
-}
-```
-
-### 2) Add worker handler
-Edit: `internal/queue/worker.go`
-
-- Register handler in mux:
-```go
-mux.HandleFunc(TypeBillingSync, w.handleBillingSync)
-```
-
-- Implement:
-```go
-func (w *Worker) handleBillingSync(ctx context.Context, t *asynq.Task) error {
-  // decode payload
-  // do idempotent work
+func Register(log *slog.Logger, reg *queue.Registry) error {
+  reg.MustRegister(queue.TaskSpec{
+    Type: TypeBillingSync,
+    Validate: func(payload json.RawMessage) error {
+      var p struct {
+        AccountID string `json:"accountId"`
+      }
+      if err := json.Unmarshal(payload, &p); err != nil || p.AccountID == "" {
+        return errors.New("accountId required")
+      }
+      return nil
+    },
+    Handler: func(ctx context.Context, t *asynq.Task) error {
+      log.Info("billing sync", "payload", string(t.Payload()))
+      return nil
+    },
+  })
   return nil
 }
 ```
 
-### 3) Enqueue
-```bash
-curl -sS http://localhost:8080/v1/enqueue \
-  -H 'content-type: application/json' \
-  -d '{"type":"billing:sync","queue":"critical","payload":{"accountId":"acc_123"}}'
+Register it in `internal/modules/loader.go`:
+
+```go
+var moduleCatalog = map[string]moduleSpec{
+  "billing": {registerTasks: billing.Register},
+}
 ```
+
+If your module exposes `RegisterSchedules`, the scheduler will call it so you can enqueue periodic tasks.
 
 ---
 
@@ -155,7 +185,7 @@ curl -sS http://localhost:8080/v1/enqueue \
 
 ### Environment variables (services)
 
-Copy `.env.example` to `.env` and adjust for your environment. The defaults are safe for local dev; production should set Redis auth and an enqueue auth token.
+Copy `.env.example` to `.env` and adjust for your environment. The defaults are safe for local dev; production should set Redis auth and an enqueue auth token. Each binary reads both unprefixed variables and service-prefixed variants (`QUEUE_API_`, `WORKER_`, `SCHEDULER_`); prefixed values win.
 
 Used by `queue-api`, `worker`, `scheduler`:
 
@@ -167,6 +197,9 @@ Used by `queue-api`, `worker`, `scheduler`:
 | `REDIS_DIAL_TIMEOUT_MS` | `2000` | Redis dial timeout (ms) |
 | `REDIS_READ_TIMEOUT_MS` | `1000` | Redis read timeout (ms) |
 | `REDIS_WRITE_TIMEOUT_MS` | `1000` | Redis write timeout (ms) |
+| `EDGE_MODULES` | empty | Comma-separated module names to load; required to have any tasks |
+| `EDGE_ALLOWED_TASK_TYPES` | empty | Optional allowlist filter applied after modules load (affects queue-api validation, worker handlers, scheduler registrations) |
+| `EDGE_ALLOWED_QUEUES` | `default,critical` | Allowed queues for enqueue API (alias for `QUEUE_ALLOWLIST`) |
 
 queue-api:
 
@@ -176,7 +209,7 @@ queue-api:
 | `HTTP_MAX_BODY_BYTES` | `1048576` | Request size limit |
 | `HTTP_READ_HEADER_TIMEOUT_MS` | `5000` | Defensive timeout |
 | `ENQUEUE_AUTH_TOKEN` | empty | If set, /v1/enqueue requires `X-Edge-Token` (or `Authorization: Bearer ...`) |
-| `QUEUE_ALLOWLIST` | `default,critical` | Allowed queues for enqueue API |
+| `QUEUE_ALLOWLIST` | `default,critical` | Allowed queues for enqueue API (falls back to `EDGE_ALLOWED_QUEUES`) |
 | `REDIS_PING_TIMEOUT_MS` | `1500` | Timeout for readiness Redis ping |
 
 worker:
@@ -231,11 +264,11 @@ done | sort | uniq -c
 ```
 
 ### 4) Queue works
-Enqueue a task and observe in asynqmon:
+Enqueue one of your registered task types and observe in asynqmon:
 ```bash
 curl -sS http://localhost:8080/v1/enqueue \
   -H 'content-type: application/json' \
-  -d '{"type":"example:ping","queue":"default","payload":{"ok":true}}'
+  -d '{"type":"billing:sync","queue":"default","payload":{"accountId":"acc_123"}}'
 ```
 
 Open: `http://localhost:8082`
@@ -243,8 +276,9 @@ Open: `http://localhost:8082`
 ### 5) Automated smoke test
 ```bash
 chmod +x scripts/smoke.sh
-./scripts/smoke.sh
-SMOKE_ENABLE_AUTH=1 ENQUEUE_AUTH_TOKEN=dev-token ./scripts/smoke.sh  # also verifies auth path
+./scripts/smoke.sh  # health + rate limit checks
+SMOKE_ENQUEUE_PAYLOAD='{"type":"billing:sync","queue":"default","payload":{"accountId":"acc_123"}}' SMOKE_EXPECT_LOG="billing sync" ./scripts/smoke.sh  # also verifies queue path (requires your module)
+SMOKE_ENABLE_AUTH=1 ENQUEUE_AUTH_TOKEN=dev-token ./scripts/smoke.sh  # adds auth checks; include SMOKE_ENQUEUE_PAYLOAD to exercise enqueue
 ```
 
 ---
@@ -348,5 +382,3 @@ docker compose -f deploy/docker-compose/dev.yml logs -f asynqmon
 - [x] Add request validation/whitelist for task types
 - [ ] Add Prometheus metrics + dashboards
 - [ ] Add tracing (OpenTelemetry)
-- [ ] Add Helm chart (umbrella + per-project values)
-- [ ] Add DLQ/alerting conventions

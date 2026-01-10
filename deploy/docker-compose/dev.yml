@@ -32,7 +32,7 @@ services:
       - QUEUE_ALLOWLIST=${QUEUE_ALLOWLIST:-}
       - EDGE_ALLOWED_QUEUES=${EDGE_ALLOWED_QUEUES:-}
       - EDGE_ALLOWED_TASK_TYPES=${EDGE_ALLOWED_TASK_TYPES:-}
-      - EDGE_MODULES=${EDGE_MODULES:-demo}
+      - EDGE_MODULES=${EDGE_MODULES:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_DB=${REDIS_DB:-0}
     depends_on: [redis]
@@ -44,7 +44,7 @@ services:
     env_file: .env
     environment:
       - REDIS_ADDR=redis:6379
-      - EDGE_MODULES=${EDGE_MODULES:-demo}
+      - EDGE_MODULES=${EDGE_MODULES:-}
       - EDGE_ALLOWED_TASK_TYPES=${EDGE_ALLOWED_TASK_TYPES:-}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_DB=${REDIS_DB:-0}
@@ -57,9 +57,8 @@ services:
     env_file: .env
     environment:
       - REDIS_ADDR=redis:6379
-      - EDGE_MODULES=${EDGE_MODULES:-demo}
+      - EDGE_MODULES=${EDGE_MODULES:-}
       - EDGE_ALLOWED_TASK_TYPES=${EDGE_ALLOWED_TASK_TYPES:-}
-      - SCHEDULER_ENABLE_DEMO_JOBS=true
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_DB=${REDIS_DB:-0}
     depends_on: [redis]
