@@ -34,6 +34,7 @@ This repo is meant to be **deployed per-project** (separate servers / namespaces
 From repo root:
 
 ```bash
+cp .env.example .env  # adjust tokens/secrets for your environment
 docker compose -f deploy/docker-compose/dev.yml up --build
 ```
 

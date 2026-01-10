@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -10,16 +12,36 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/cadmus-group/posta/internal/config"
+	"github.com/cadmus-group/posta/internal/modules"
 	"github.com/cadmus-group/posta/internal/queue"
+	"github.com/cadmus-group/posta/internal/version"
 )
 
 func main() {
-	cfg := config.Load()
+	versionFlag := flag.Bool("version", false, "print version information and exit")
+	flag.Parse()
+
+	if *versionFlag {
+		fmt.Print(version.Info())
+		return
+	}
+
+	cfg := config.LoadWithPrefix("WORKER")
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 
-	w := queue.NewWorker(log)
+	reg, err := modules.BuildRegistry(cfg.Modules, cfg.AllowedTaskTypes, log)
+	if err != nil {
+		log.Error("failed to load modules", "err", err)
+		os.Exit(1)
+	}
+
+	mux, err := queue.NewServeMux(reg, nil)
+	if err != nil {
+		log.Error("failed to build worker mux", "err", err)
+		os.Exit(1)
+	}
 
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{
@@ -40,7 +62,7 @@ func main() {
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("worker started")
-		errCh <- srv.Run(w.Mux())
+		errCh <- srv.Run(mux)
 	}()
 
 	stop := make(chan os.Signal, 1)

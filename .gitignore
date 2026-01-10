@@ -30,6 +30,11 @@ coverage.out
 .env
 .env.*
 !.env.example
+certs/
+*.crt
+*.key
+*.pem
+*.csr
 
 # OS cruft
 .DS_Store

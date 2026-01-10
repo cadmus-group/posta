@@ -1,0 +1,186 @@
+openapi: 3.1.0
+info:
+  title: Posta Queue API
+  version: 0.1.0
+  description: |
+    Edge + jobs API for enqueuing tasks into Asynq.
+    This spec is the source of truth for `/v1/enqueue` and generated clients.
+servers:
+  - url: http://localhost:8080
+    description: Local dev through Traefik
+  - url: http://queue-api:8081
+    description: queue-api service (internal)
+tags:
+  - name: queue
+    description: Task enqueue endpoints
+  - name: system
+    description: Health and metrics
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness probe
+      responses:
+        '200':
+          description: Service is running
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ok
+  /ready:
+    get:
+      tags: [system]
+      summary: Readiness probe (Redis ping)
+      responses:
+        '200':
+          description: Redis is reachable
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ready
+        '503':
+          description: Redis is not reachable
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: not ready
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus metrics
+      responses:
+        '200':
+          description: Prometheus metrics in text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+  /v1/enqueue:
+    post:
+      tags: [queue]
+      summary: Enqueue a task
+      description: |
+        Accepts a task type + payload, validates against the allowlist, and enqueues into the chosen queue.
+        Rate limiting is enforced at the gateway; expect HTTP 429 when limits are exceeded.
+      operationId: enqueueTask
+      security:
+        - bearerAuth: []
+        - edgeToken: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnqueueRequest'
+            examples:
+              ping:
+                summary: Ping task
+                value:
+                  type: example:ping
+                  queue: default
+                  payload:
+                    ok: true
+              sendEmail:
+                summary: Email task
+                value:
+                  type: example:send_email
+                  queue: default
+                  payload:
+                    to: dev@cadmus
+                    subject: Hello
+                    body: Hello from Posta
+      responses:
+        '200':
+          description: Enqueued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnqueueResponse'
+        '400':
+          description: Invalid request (unknown task type, queue not allowed, malformed payload)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized (token required and missing/invalid)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded (enforced at gateway)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Bearer token validated by queue-api (if configured)
+    edgeToken:
+      type: apiKey
+      in: header
+      name: X-Edge-Token
+      description: Static token validated by queue-api (if configured)
+  schemas:
+    EnqueueRequest:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type:
+          type: string
+          minLength: 1
+          description: Registered task type
+          example: example:ping
+        queue:
+          type: string
+          description: Queue name (defaults to configured default)
+          example: default
+        payload:
+          type: object
+          description: Arbitrary JSON payload validated by the server for the given task type
+          additionalProperties: true
+    EnqueueResponse:
+      type: object
+      required: [id, queue]
+      properties:
+        id:
+          type: string
+          description: Asynq task ID
+          example: 2ca7518d-8d2e-4ca9-8fc5-ff4c4c143b5c
+        queue:
+          type: string
+          description: Queue name used for the enqueue request
+          example: default
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code
+          example: queue_not_allowed
+        message:
+          type: string
+          description: Human-readable error
+          example: queue not allowed
+        requestId:
+          type: string
+          description: Request ID (from chi middleware) when available
+          example: 01JABCDXYZ123
+

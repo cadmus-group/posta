@@ -1,13 +1,23 @@
 FROM golang:1.25.3-alpine AS build
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
 WORKDIR /src
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/scheduler ./cmd/scheduler
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X github.com/cadmus-group/posta/internal/version.Version=${VERSION} -X github.com/cadmus-group/posta/internal/version.Commit=${COMMIT} -X github.com/cadmus-group/posta/internal/version.BuildDate=${BUILD_DATE}" -o /out/scheduler ./cmd/scheduler
 
 FROM gcr.io/distroless/static:nonroot
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.source="https://github.com/cadmus-group/posta" \
+	org.opencontainers.image.version="${VERSION}" \
+	org.opencontainers.image.revision="${COMMIT}" \
+	org.opencontainers.image.created="${BUILD_DATE}"
 COPY --from=build /out/scheduler /scheduler
 USER nonroot:nonroot
 ENTRYPOINT ["/scheduler"]

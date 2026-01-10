@@ -19,17 +19,24 @@ import (
 	"github.com/cadmus-group/posta/internal/queue"
 )
 
+type apiError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"requestId,omitempty"`
+}
+
 type Server struct {
 	log           *slog.Logger
 	cfg           config.Config
 	qc            *queue.Client
+	registry      *queue.Registry
 	readyClient   *redis.Client
 	allowedQueues map[string]struct{}
 	auth          *Authenticator
 	handler       http.Handler
 }
 
-func New(log *slog.Logger, cfg config.Config, qc *queue.Client) *Server {
+func New(log *slog.Logger, cfg config.Config, qc *queue.Client, reg *queue.Registry) *Server {
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
@@ -46,10 +53,15 @@ func New(log *slog.Logger, cfg config.Config, qc *queue.Client) *Server {
 		WriteTimeout: cfg.RedisWriteTimeout,
 	})
 
+	if reg == nil {
+		reg = queue.NewRegistry()
+	}
+
 	s := &Server{
 		log:           log,
 		cfg:           cfg,
 		qc:            qc,
+		registry:      reg,
 		readyClient:   readyClient,
 		allowedQueues: makeAllowedQueueSet(cfg.QueueAllowList),
 		auth:          newAuthenticator(log, cfg.EnqueueAuthToken),
@@ -63,14 +75,7 @@ func New(log *slog.Logger, cfg config.Config, qc *queue.Client) *Server {
 
 	r.Get("/ready", s.handleReady)
 
-	enqueueHandler := http.HandlerFunc(s.handleEnqueue)
-	if s.auth != nil {
-		r.Post("/v1/enqueue", func(w http.ResponseWriter, r *http.Request) {
-			s.auth.Middleware(enqueueHandler).ServeHTTP(w, r)
-		})
-	} else {
-		r.Post("/v1/enqueue", enqueueHandler)
-	}
+	r.Post("/v1/enqueue", s.handleEnqueue)
 
 	s.handler = r
 	return s
@@ -87,6 +92,11 @@ type enqueueReq struct {
 func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	reqID := chimw.GetReqID(r.Context())
 
+	if s.auth != nil && !s.auth.isAuthorized(r) {
+		s.writeError(w, r, http.StatusUnauthorized, "unauthorized", "missing or invalid token")
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
 	defer r.Body.Close()
 
@@ -94,13 +104,13 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+		s.writeError(w, r, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
 	// Extra garbage after JSON object?
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+		s.writeError(w, r, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
@@ -108,7 +118,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	req.Queue = strings.TrimSpace(req.Queue)
 
 	if req.Type == "" {
-		http.Error(w, "missing type", http.StatusBadRequest)
+		s.writeError(w, r, http.StatusBadRequest, "invalid_request", "missing type")
 		return
 	}
 	if req.Queue == "" {
@@ -116,20 +126,20 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, ok := s.allowedQueues[req.Queue]; !ok {
-		http.Error(w, "unknown queue", http.StatusBadRequest)
 		s.log.Warn("enqueue rejected: queue not allowed", "request_id", reqID, "queue", req.Queue)
+		s.writeError(w, r, http.StatusBadRequest, "queue_not_allowed", "queue not allowed")
 		return
 	}
 
-	if !queue.IsAllowedType(req.Type) {
-		http.Error(w, "unknown task type", http.StatusBadRequest)
-		s.log.Warn("enqueue rejected: task type not allowed", "request_id", reqID, "type", req.Type, "queue", req.Queue)
-		return
-	}
-
-	if err := queue.ValidatePayload(req.Type, req.Payload); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+	if err := s.registry.Validate(req.Type, req.Payload); err != nil {
+		code := "invalid_payload"
+		message := "invalid payload"
+		if errors.Is(err, queue.ErrUnknownTaskType) {
+			code = "unknown_task"
+			message = "unknown task type"
+		}
 		s.log.Warn("enqueue rejected: invalid payload", "request_id", reqID, "type", req.Type, "queue", req.Queue, "err", err)
+		s.writeError(w, r, http.StatusBadRequest, code, message)
 		return
 	}
 
@@ -139,10 +149,14 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.Error("enqueue failed", "request_id", reqID, "type", req.Type, "queue", req.Queue, "err", err)
 		status := http.StatusInternalServerError
+		code := "enqueue_failed"
+		message := "enqueue failed"
 		if errors.Is(err, asynq.ErrQueueNotFound) {
 			status = http.StatusBadRequest
+			code = "queue_not_found"
+			message = "queue not found"
 		}
-		http.Error(w, "enqueue failed", status)
+		s.writeError(w, r, status, code, message)
 		return
 	}
 
@@ -168,6 +182,16 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ready"))
+}
+
+func (s *Server) writeError(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(apiError{
+		Code:      code,
+		Message:   msg,
+		RequestID: chimw.GetReqID(r.Context()),
+	})
 }
 
 func makeAllowedQueueSet(queues []string) map[string]struct{} {
