@@ -30,6 +30,7 @@ coverage.out
 .env
 .env.*
 !.env.example
+config/openapi-sources.yaml
 certs/
 *.crt
 *.key

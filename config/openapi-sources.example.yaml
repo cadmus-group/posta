@@ -1,0 +1,13 @@
+refreshSeconds: 30
+sources:
+  - name: queue-api
+    openapiUrl: file:///config/api/openapi.yaml
+    pathPrefix: /queue
+    componentPrefix: QueueAPI
+    operationPrefix: QueueAPI
+  - name: billing
+    openapiUrl: file:///config/samples/billing-openapi.yaml
+    pathPrefix: /billing
+    componentPrefix: Billing
+    operationPrefix: Billing
+

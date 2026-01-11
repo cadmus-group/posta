@@ -1,0 +1,25 @@
+FROM golang:1.25.3-alpine AS build
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/openapi-aggregator ./cmd/openapi-aggregator
+
+FROM gcr.io/distroless/static:nonroot
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.source="https://github.com/cadmus-group/posta" \
+	org.opencontainers.image.version="${VERSION}" \
+	org.opencontainers.image.revision="${COMMIT}" \
+	org.opencontainers.image.created="${BUILD_DATE}"
+COPY --from=build /out/openapi-aggregator /openapi-aggregator
+USER nonroot:nonroot
+EXPOSE 8083
+ENTRYPOINT ["/openapi-aggregator"]
+

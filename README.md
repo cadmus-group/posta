@@ -58,6 +58,7 @@ docker compose -f deploy/docker-compose/dev.yml up --build
 - **Gateway (Traefik)**: `http://localhost:8080`
 - **Health** (through gateway → queue-api): `http://localhost:8080/health`
 - **Readiness** (Redis ping): `http://localhost:8080/ready`
+- **Aggregated templates**: `http://localhost:8080/openapi.json`
 - **asynqmon UI**: `http://localhost:8082`
 - **Redis**: `localhost:6379` (exposed for debugging)
 
@@ -107,6 +108,40 @@ A Go service imports Asynq and enqueues tasks directly to Redis.
 - Harder to govern and audit
 
 **Rule:** if we ever allow Pattern B, we will create a `pkg/queueclient` (public) package and **never** import from `internal/` across repos.
+
+---
+
+## How templates auto-work (OpenAPI aggregation)
+- Each microservice owns its enqueue endpoints and ships an OpenAPI doc at `/openapi.json` that includes schemas/examples for those endpoints.
+- `openapi-aggregator` reads `config/openapi-sources.yaml`, fetches each service spec on a timer, prefixes paths and component names per service, and serves a merged `GET /openapi.json` (and `GET /sources` for debugging).
+- Traefik routes `/openapi.json` to the aggregator; it **does not** proxy enqueue calls—those stay routed to the owning microservice path prefixes.
+- If one source is down, the aggregator keeps serving the last good merged doc and exposes the failure in `/sources`; `/ready` becomes 503 until the next successful refresh.
+
+### Microservice contract requirements
+- Serve OpenAPI at `/openapi.json` (JSON or YAML).
+- Use a stable base path (recommended: `/service-name/...` or `/service-name/enqueue/...`) to avoid collisions; the aggregator requires a `pathPrefix` per service.
+- Include schemas/examples for request bodies and responses so clients can build templates automatically.
+- Keep operationIds unique inside the service; the aggregator will prefix them if collisions occur.
+
+### Linking a new microservice
+1) Add a Traefik rule (file provider, Ingress, or mesh) that routes the service’s base path through the gateway.
+2) Add the service to `config/openapi-sources.yaml` (or point `OPENAPI_SOURCES_FILE` to another file):
+   ```yaml
+   refreshSeconds: 30
+   sources:
+     - name: billing
+       openapiUrl: http://billing:8080/openapi.json
+       pathPrefix: /billing
+       componentPrefix: Billing
+       operationPrefix: Billing
+   ```
+3) Restart `openapi-aggregator` or let it pick up changes on the next refresh.
+- `openapiUrl` accepts `http(s)` or `file://` (dev example uses `file://` to read the repo’s sample specs).
+
+### Frontend integration
+- Fetch `GET /openapi.json` via the gateway to render enqueue templates or generate clients.
+- Call enqueue endpoints through the gateway using the path prefixes defined in the OpenAPI document (e.g., `POST /billing/enqueue/...`).
+- Cache if you want, but the aggregator already refreshes periodically; rely on ETag/Last-Modified if your HTTP client supports it.
 
 ---
 
@@ -285,26 +320,30 @@ SMOKE_ENABLE_AUTH=1 ENQUEUE_AUTH_TOKEN=dev-token ./scripts/smoke.sh  # adds auth
 
 ## Deploying (containers) — per project server (VPS / bare metal)
 
-### Build images
+### Build images (optional if not pulling from registry)
 ```bash
 docker build -f Dockerfile.queue-api -t ghcr.io/<org>/edge-stack-queue-api:<tag> .
 docker build -f Dockerfile.worker    -t ghcr.io/<org>/edge-stack-worker:<tag> .
 docker build -f Dockerfile.scheduler -t ghcr.io/<org>/edge-stack-scheduler:<tag> .
+docker build -f Dockerfile.openapi-aggregator -t ghcr.io/<org>/edge-stack-openapi-aggregator:<tag> .
 ```
 
-### Push images
+### Deploy on a server with docker compose
 ```bash
-docker push ghcr.io/<org>/edge-stack-queue-api:<tag>
-docker push ghcr.io/<org>/edge-stack-worker:<tag>
-docker push ghcr.io/<org>/edge-stack-scheduler:<tag>
+cp .env.example .env
+# set REDIS_ADDR/REDIS_PASSWORD, ENQUEUE_AUTH_TOKEN, domains, and path prefixes
+cp config/openapi-sources.example.yaml config/openapi-sources.yaml
+# edit config/openapi-sources.yaml for your services (pathPrefix required)
+docker compose -f deploy/docker-compose/prod.yml up -d --build
 ```
+- Traefik listens on :80/:443 and routes `/openapi.json` to the aggregator and `/` to `queue-api`.
+- Keep Redis internal (only exposed via the Docker network). Point `REDIS_ADDR` to a managed instance if available.
+- Place Traefik behind your existing LB or let it manage TLS via ACME (set `LETS_ENCRYPT_EMAIL` in `.env`).
 
-### Start from compose
-Take `deploy/docker-compose/dev.yml` and create a `prod.yml`:
-- Do **not** expose Redis publicly
-- Run Traefik behind your real LB / reverse proxy if needed
-- Add persistent volumes / managed Redis
-- Add auth in front of `/v1/enqueue`
+### Linking external microservices in prod
+- Microservices can run outside this compose file as long as they are reachable from the Traefik/OpenAPI network (same Docker network or private LAN/VPC).
+- Add each service to `config/openapi-sources.yaml` with `openapiUrl` and `pathPrefix`; restart `openapi-aggregator` or let it refresh.
+- Add matching Traefik rules (file provider or Kubernetes Ingress) to route the chosen `pathPrefix` to the target service.
 
 ---
 

@@ -36,6 +36,11 @@ wait_for() {
 
 wait_for "${BASE_URL}/health" "health"
 wait_for "${BASE_URL}/ready" "ready"
+wait_for "${BASE_URL}/openapi.json" "openapi"
+if ! curl -fsS "${BASE_URL}/openapi.json" | grep -q '"openapi"'; then
+	echo "/openapi.json did not contain an openapi field" >&2
+	exit 1
+fi
 
 AUTH_HEADERS=()
 if [[ -n "${ENQUEUE_AUTH_TOKEN:-}" ]]; then

@@ -1,5 +1,10 @@
 http:
   routers:
+    openapi-aggregator:
+      rule: "Path(`/openapi.json`) || Path(`/sources`)"
+      entryPoints: ["web"]
+      service: openapi-aggregator
+      priority: 20
     queue-api:
       rule: "PathPrefix(`/`)"
       entryPoints: ["web"]
@@ -7,6 +12,10 @@ http:
       middlewares: ["rl"]
 
   services:
+    openapi-aggregator:
+      loadBalancer:
+        servers:
+          - url: "http://openapi-aggregator:8083"
     queue-api:
       loadBalancer:
         servers:

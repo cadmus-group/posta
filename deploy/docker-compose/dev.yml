@@ -18,7 +18,20 @@ services:
     volumes:
       - ../../gateway/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ../../gateway/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
-    depends_on: [redis, queue-api]
+    depends_on: [redis, queue-api, openapi-aggregator]
+
+  openapi-aggregator:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.openapi-aggregator
+    env_file: .env
+    environment:
+      - HTTP_ADDR=:8083
+      - OPENAPI_SOURCES_FILE=/config/openapi-sources.example.yaml
+    volumes:
+      - ../../config:/config:ro
+      - ../../api:/config/api:ro
+    depends_on: [queue-api]
 
   queue-api:
     build:

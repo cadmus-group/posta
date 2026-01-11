@@ -1,0 +1,41 @@
+openapi: 3.0.3
+info:
+  title: Billing enqueue API
+  version: 1.0.0
+paths:
+  /enqueue:
+    post:
+      summary: Enqueue billing sync task
+      operationId: enqueueBillingSync
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BillingSyncRequest'
+            examples:
+              default:
+                value:
+                  accountId: acc_123
+      responses:
+        "200":
+          description: accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnqueueResponse'
+components:
+  schemas:
+    BillingSyncRequest:
+      type: object
+      required:
+        - accountId
+      properties:
+        accountId:
+          type: string
+    EnqueueResponse:
+      type: object
+      properties:
+        id:
+          type: string
+
