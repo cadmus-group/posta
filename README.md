@@ -51,7 +51,8 @@ From repo root:
 
 ```bash
 cp .env.example .env  # adjust tokens/secrets for your environment
-docker compose -f deploy/docker-compose/dev.yml up --build
+chmod +x ./run.sh
+./run.sh -c "up --build"
 ```
 
 ### Local endpoints
@@ -282,7 +283,7 @@ If you rate-limit by IP behind load balancers, you’ll often rate-limit your LB
 
 ### 1) Everything up
 ```bash
-docker compose -f deploy/docker-compose/dev.yml up --build
+./run.sh -c "up --build"
 ```
 
 ### 2) Health works
@@ -291,7 +292,6 @@ curl -i http://localhost:8080/health
 ```
 
 ### 3) Rate limiter works (you should see 429 after you exceed limits)
-Example quick burst test (adjust numbers to exceed your config):
 ```bash
 for i in {1..100}; do
   curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/health
@@ -299,7 +299,6 @@ done | sort | uniq -c
 ```
 
 ### 4) Queue works
-Enqueue one of your registered task types and observe in asynqmon:
 ```bash
 curl -sS http://localhost:8080/v1/enqueue \
   -H 'content-type: application/json' \
@@ -311,9 +310,8 @@ Open: `http://localhost:8082`
 ### 5) Automated smoke test
 ```bash
 chmod +x scripts/smoke.sh
-./scripts/smoke.sh  # health + rate limit checks
-SMOKE_ENQUEUE_PAYLOAD='{"type":"billing:sync","queue":"default","payload":{"accountId":"acc_123"}}' SMOKE_EXPECT_LOG="billing sync" ./scripts/smoke.sh  # also verifies queue path (requires your module)
-SMOKE_ENABLE_AUTH=1 ENQUEUE_AUTH_TOKEN=dev-token ./scripts/smoke.sh  # adds auth checks; include SMOKE_ENQUEUE_PAYLOAD to exercise enqueue
+./run.sh -c "up -d"
+./scripts/smoke.sh
 ```
 
 ---
@@ -334,7 +332,7 @@ cp .env.example .env
 # set REDIS_ADDR/REDIS_PASSWORD, ENQUEUE_AUTH_TOKEN, domains, and path prefixes
 cp config/openapi-sources.example.yaml config/openapi-sources.yaml
 # edit config/openapi-sources.yaml for your services (pathPrefix required)
-docker compose -f deploy/docker-compose/prod.yml up -d --build
+./run.sh -f deploy/docker-compose/prod.yml -c "up -d --build"
 ```
 - Traefik listens on :80/:443 and routes `/openapi.json` to the aggregator and `/` to `queue-api`.
 - Keep Redis internal (only exposed via the Docker network). Point `REDIS_ADDR` to a managed instance if available.
@@ -387,11 +385,8 @@ Before production:
 ## Troubleshooting
 
 ### Traefik rate limit not applying
-- Confirm `gateway/traefik/dynamic.yml` is mounted and includes the `rl` middleware.
-- Check that Redis is reachable from Traefik (same Redis used by the app).
-- Check Traefik logs in compose:
 ```bash
-docker compose -f deploy/docker-compose/dev.yml logs -f traefik
+./run.sh -c "logs -f traefik"
 ```
 
 ### asynqmon not connecting to Redis
