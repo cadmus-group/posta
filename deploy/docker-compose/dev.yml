@@ -9,12 +9,16 @@ services:
     ports:
       - "6379:6379" # dev only
 
-
   traefik:
     image: traefik:v3.2
     env_file: .env
     ports:
       - "8080:8080"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ../../gateway/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ../../gateway/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
@@ -27,10 +31,10 @@ services:
     env_file: .env
     environment:
       - HTTP_ADDR=:8083
-      - OPENAPI_SOURCES_FILE=/config/openapi-sources.example.yaml
+      - OPENAPI_SOURCES_FILE=/app/openapi-sources.example.yaml
     volumes:
-      - ../../config:/config:ro
-      - ../../api:/config/api:ro
+      - ../../config/openapi-sources.example.yaml:/app/openapi-sources.example.yaml:ro
+      - ../../api/openapi.yaml:/app/api/openapi.yaml:ro
     depends_on: [queue-api]
 
   queue-api:
@@ -79,8 +83,13 @@ services:
   asynqmon:
     image: hibiken/asynqmon
     ports: ["8082:8080"]
-    command: ["--redis-addr=redis:6379"]
+    command: ["--redis-addr=redis:6379", "--redis-password=${REDIS_PASSWORD:-}"]
     depends_on: [redis]
 
 volumes:
   redis-data:
+
+networks:
+  default:
+    name: posta-network
+    external: true

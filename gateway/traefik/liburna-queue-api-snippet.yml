@@ -1,0 +1,37 @@
+# Add these entries into your liburna Traefik dynamic config (http.routers, http.services, http.middlewares).
+# Then ensure queue-api is on the same Docker network as Traefik (e.g. liburna-argus_default) with name "queue-api".
+
+# Under http.routers add:
+    queue-api:
+      rule: "PathPrefix(`/queue-api`)"
+      entryPoints: ["web"]
+      service: queue-api
+      middlewares: ["strip-queue-api"]
+      priority: 100
+# Optional: redirect root to queue-api health (add under http.routers):
+    root-to-queue-api:
+      rule: "Path(`/`)"
+      entryPoints: ["web"]
+      middlewares: ["redirect-to-queue-api"]
+      service: queue-api
+      priority: 1
+
+# Under http.services add:
+    queue-api:
+      loadBalancer:
+        servers:
+          - url: "http://queue-api:8081"
+        healthCheck:
+          path: /health
+          interval: 30s
+
+# Under http.middlewares add:
+    strip-queue-api:
+      stripPrefix:
+        prefixes: ["/queue-api"]
+# Optional (for root redirect):
+    redirect-to-queue-api:
+      redirectRegex:
+        regex: "^https?://([^/]+)/?$"
+        replacement: "http://${1}/queue-api/health"
+        permanent: false

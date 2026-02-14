@@ -1,13 +1,33 @@
-refreshSeconds: 30
-sources:
-  - name: queue-api
-    openapiUrl: file:///config/api/openapi.yaml
-    pathPrefix: /queue
-    componentPrefix: QueueAPI
-    operationPrefix: QueueAPI
-  - name: billing
-    openapiUrl: file:///config/samples/billing-openapi.yaml
-    pathPrefix: /billing
-    componentPrefix: Billing
-    operationPrefix: Billing
+# Posta OpenAPI Aggregator Configuration for liburna-argus
+# Copy this file to your Posta config directory or mount it as a volume
 
+refreshSeconds: 30
+
+sources:
+  # Ingestion Service - RSS/Atom feed processing
+  - name: ingestion
+    openapiUrl: http://liburna-ingestion:8000/openapi.json
+    pathPrefix: /ingestion
+    componentPrefix: Ingestion
+    operationPrefix: ingestion
+
+  # Extractor Service - Article content extraction
+  - name: extractor
+    openapiUrl: http://liburna-extractor:8000/openapi.json
+    pathPrefix: /extractor
+    componentPrefix: Extractor
+    operationPrefix: extractor
+
+  # Encoder Service - BGE-M3 semantic embeddings
+  - name: encoder
+    openapiUrl: http://liburna-encoder:8000/openapi.json
+    pathPrefix: /encoder
+    componentPrefix: Encoder
+    operationPrefix: encoder
+
+  # Posta Queue API - edge enqueue / jobs (file:// when spec is mounted in aggregator)
+  - name: queue-api
+    openapiUrl: file:///app/api/openapi.yaml
+    pathPrefix: /queue-api
+    componentPrefix: QueueAPI
+    operationPrefix: queueApi

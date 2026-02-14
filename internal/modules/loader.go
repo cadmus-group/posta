@@ -7,6 +7,7 @@ import (
 
 	"github.com/hibiken/asynq"
 
+	"github.com/cadmus-group/posta/internal/modules/generic"
 	"github.com/cadmus-group/posta/internal/queue"
 )
 
@@ -15,7 +16,9 @@ type moduleSpec struct {
 	registerSchedules func(log *slog.Logger, s *asynq.Scheduler, defaultQueue string) error
 }
 
-var moduleCatalog = map[string]moduleSpec{}
+var moduleCatalog = map[string]moduleSpec{
+	"generic": {registerTasks: generic.Register},
+}
 
 // BuildRegistry loads modules and optionally filters to the allowed task types list.
 func BuildRegistry(modules []string, allowedTaskTypes []string, log *slog.Logger) (*queue.Registry, error) {

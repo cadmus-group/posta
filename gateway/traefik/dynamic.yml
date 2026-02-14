@@ -1,15 +1,51 @@
 http:
   routers:
+    root:
+      rule: "Path(`/`)"
+      entryPoints: ["web"]
+      middlewares: ["redirect-root"]
+      service: queue-api
+      priority: 1
     openapi-aggregator:
       rule: "Path(`/openapi.json`) || Path(`/sources`)"
       entryPoints: ["web"]
       service: openapi-aggregator
       priority: 20
     queue-api:
-      rule: "PathPrefix(`/`)"
+      rule: "PathPrefix(`/queue-api`)"
       entryPoints: ["web"]
       service: queue-api
-      middlewares: ["rl"]
+      middlewares: ["strip-queue-api", "rl"]
+      priority: 100
+    fleet-fastapi:
+      rule: "PathPrefix(`/fleet`)"
+      service: fleet-fastapi
+      entryPoints:
+        - web
+    fleet-express:
+      rule: "PathPrefix(`/express`)"
+      service: fleet-express
+      entryPoints:
+        - web
+    # Liburna Argus Services
+    liburna-ingestion:
+      rule: "PathPrefix(`/ingestion`)"
+      service: liburna-ingestion
+      entryPoints: ["web"]
+      middlewares: ["strip-ingestion"]
+      priority: 100
+    liburna-extractor:
+      rule: "PathPrefix(`/extractor`)"
+      service: liburna-extractor
+      entryPoints: ["web"]
+      middlewares: ["strip-extractor"]
+      priority: 100
+    liburna-encoder:
+      rule: "PathPrefix(`/encoder`)"
+      service: liburna-encoder
+      entryPoints: ["web"]
+      middlewares: ["strip-encoder"]
+      priority: 100
 
   services:
     openapi-aggregator:
@@ -20,8 +56,46 @@ http:
       loadBalancer:
         servers:
           - url: "http://queue-api:8081"
+        healthCheck:
+          path: /health
+          interval: 30s
+    fleet-fastapi:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:8000"
+    fleet-express:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3000"
+    # Liburna Argus Services
+    liburna-ingestion:
+      loadBalancer:
+        servers:
+          - url: "http://liburna-ingestion:8000"
+        healthCheck:
+          path: /health
+          interval: 30s
+    liburna-extractor:
+      loadBalancer:
+        servers:
+          - url: "http://liburna-extractor:8000"
+        healthCheck:
+          path: /health
+          interval: 30s
+    liburna-encoder:
+      loadBalancer:
+        servers:
+          - url: "http://liburna-encoder:8000"
+        healthCheck:
+          path: /health
+          interval: 30s
 
   middlewares:
+    redirect-root:
+      redirectRegex:
+        regex: "^https?://([^/]+)/?$"
+        replacement: "http://${1}/queue-api/health"
+        permanent: false
     rl:
       plugin:
         clusterRatelimit:
@@ -31,3 +105,21 @@ http:
           redisAddress: "redis:6379"
           redisPassword: "$REDIS_PASSWORD"
           redisDb: 0
+    # Liburna strip-prefix middlewares
+    strip-ingestion:
+      stripPrefix:
+        prefixes: ["/ingestion"]
+    strip-extractor:
+      stripPrefix:
+        prefixes: ["/extractor"]
+    strip-encoder:
+      stripPrefix:
+        prefixes: ["/encoder"]
+    strip-queue-api:
+      stripPrefix:
+        prefixes: ["/queue-api"]
+
+networks:
+  default:
+    name: posta-network
+    external: true

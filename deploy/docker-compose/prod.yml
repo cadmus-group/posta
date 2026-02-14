@@ -35,6 +35,7 @@ services:
       - OPENAPI_SOURCES_FILE=/config/openapi-sources.yaml
     volumes:
       - ../../config/openapi-sources.yaml:/config/openapi-sources.yaml:ro
+      - ../../api/openapi.yaml:/app/api/openapi.yaml:ro
     depends_on:
       - queue-api
 
