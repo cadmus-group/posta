@@ -2,6 +2,7 @@ package generic
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 
 	"github.com/hibiken/asynq"
@@ -15,7 +16,7 @@ const TypeGeneric = "generic"
 func Register(log *slog.Logger, reg *queue.Registry) error {
 	reg.MustRegister(queue.TaskSpec{
 		Type:     TypeGeneric,
-		Validate: func(_ []byte) error { return nil }, // accept any JSON
+		Validate: func(_ json.RawMessage) error { return nil }, // accept any JSON
 		Handler: func(ctx context.Context, t *asynq.Task) error {
 			log.Info("generic task", "payload", string(t.Payload()))
 			return nil
