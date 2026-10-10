@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1](https://github.com/cadmus-group/posta/compare/v0.1.0...v0.1.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* align public examples, API docs, and CI smoke paths ([dbb0a26](https://github.com/cadmus-group/posta/commit/dbb0a268416db102e92104632b641eeb40d0f53b))
+
 ## [Unreleased]
 ### Removed
 - Demo/example tasks, bundled demo scheduler job, and hardcoded smoke test payloads. The stack no longer ships with the former application-specific demonstration tasks or scheduled jobs.
@@ -15,4 +22,3 @@ All notable changes to this project will be documented in this file.
 - Example tasks (ping/email), demo scheduler job, and smoke test script.
 - Docker Compose dev stack and distroless images for all services.
 - Version metadata injection, Makefile build targets, and `.env.example` defaults.
-
