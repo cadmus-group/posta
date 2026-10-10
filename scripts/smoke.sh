@@ -34,8 +34,8 @@ wait_for() {
 	exit 1
 }
 
-wait_for "${BASE_URL}/health" "health"
-wait_for "${BASE_URL}/ready" "ready"
+wait_for "${BASE_URL}/queue-api/health" "health"
+wait_for "${BASE_URL}/queue-api/ready" "ready"
 wait_for "${BASE_URL}/openapi.json" "openapi"
 if ! curl -fsS "${BASE_URL}/openapi.json" | grep -q '"openapi"'; then
 	echo "/openapi.json did not contain an openapi field" >&2
@@ -51,7 +51,7 @@ enqueue_payload="${SMOKE_ENQUEUE_PAYLOAD:-}"
 
 if [[ -n "${enqueue_payload}" ]]; then
 	status="$(curl -s -o /tmp/posta-enqueue.json -w "%{http_code}" -X POST -H "Content-Type: application/json" \
-		"${AUTH_HEADERS[@]}" -d "${enqueue_payload}" "${BASE_URL}/v1/enqueue")"
+		"${AUTH_HEADERS[@]}" -d "${enqueue_payload}" "${BASE_URL}/queue-api/v1/enqueue")"
 	if [[ "${status}" -ne 200 ]]; then
 		echo "enqueue failed (status ${status})" >&2
 		exit 1
@@ -74,7 +74,7 @@ else
 	echo "skipping enqueue check (SMOKE_ENQUEUE_PAYLOAD not set)"
 fi
 
-statuses="$(seq 1 80 | xargs -n1 -P16 -I{} curl -o /dev/null -w "%{http_code}\n" -s "${BASE_URL}/health")"
+statuses="$(seq 1 80 | xargs -n1 -P16 -I{} curl -o /dev/null -w "%{http_code}\n" -s "${BASE_URL}/queue-api/health")"
 if ! echo "${statuses}" | grep -q "429"; then
 	echo "rate limiting did not return 429 in burst test" >&2
 	exit 1
@@ -82,14 +82,14 @@ fi
 
 if [[ -n "${enqueue_payload}" && -n "${ENQUEUE_AUTH_TOKEN:-}" ]]; then
 	status_without="$(curl -o /dev/null -w "%{http_code}" -s -X POST -H "Content-Type: application/json" \
-		-d "${enqueue_payload}" "${BASE_URL}/v1/enqueue")"
+		-d "${enqueue_payload}" "${BASE_URL}/queue-api/v1/enqueue")"
 	if [[ "${status_without}" -ne 401 ]]; then
 		echo "expected 401 when token required and missing" >&2
 		exit 1
 	fi
 
 	status_with="$(curl -o /dev/null -w "%{http_code}" -s -X POST -H "Content-Type: application/json" \
-		"${AUTH_HEADERS[@]}" -d "${enqueue_payload}" "${BASE_URL}/v1/enqueue")"
+		"${AUTH_HEADERS[@]}" -d "${enqueue_payload}" "${BASE_URL}/queue-api/v1/enqueue")"
 	if [[ "${status_with}" -ne 200 ]]; then
 		echo "expected 200 when token provided" >&2
 		exit 1

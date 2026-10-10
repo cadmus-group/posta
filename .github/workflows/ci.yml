@@ -30,6 +30,8 @@ jobs:
           SMOKE_ENABLE_AUTH: "1"
           ENQUEUE_AUTH_TOKEN: "ci-smoke-token"
         run: |
+          cp .env.example .env
+          docker network inspect posta-network >/dev/null 2>&1 || docker network create posta-network
           chmod +x scripts/smoke.sh
           ./scripts/smoke.sh
 

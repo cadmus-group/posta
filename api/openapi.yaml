@@ -6,15 +6,15 @@ info:
     Edge + jobs API for enqueuing tasks into Asynq.
     This spec is the source of truth for `/v1/enqueue` and generated clients.
 servers:
-  - url: http://localhost:8080
-    description: Local dev through Traefik
+  - url: http://localhost:8080/queue-api
+    description: Local development through the Traefik /queue-api route
   - url: http://queue-api:8081
     description: queue-api service (internal)
 tags:
   - name: queue
     description: Task enqueue endpoints
   - name: system
-    description: Health and metrics
+    description: Health and readiness
 paths:
   /health:
     get:
@@ -47,17 +47,6 @@ paths:
               schema:
                 type: string
               example: not ready
-  /metrics:
-    get:
-      tags: [system]
-      summary: Prometheus metrics
-      responses:
-        '200':
-          description: Prometheus metrics in text exposition format
-          content:
-            text/plain:
-              schema:
-                type: string
   /v1/enqueue:
     post:
       tags: [queue]
@@ -128,8 +117,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
-      description: Bearer token validated by queue-api (if configured)
+      description: Static shared bearer token validated by queue-api if configured; not JWT verification
     edgeToken:
       type: apiKey
       in: header

@@ -4,9 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 ### Removed
-- Demo/example tasks, bundled demo scheduler job, and hardcoded smoke test payloads. The stack now ships without any default modules.
+- Demo/example tasks, bundled demo scheduler job, and hardcoded smoke test payloads. The stack no longer ships with the former application-specific demonstration tasks or scheduled jobs.
 ### Changed
-- Docs, OpenAPI examples, and configuration defaults updated to require user-defined modules.
+- A built-in `generic` sample module is available for local testing; production tasks still require user-defined handlers.
 
 ## [0.1.0] - 2026-01-10
 ### Added

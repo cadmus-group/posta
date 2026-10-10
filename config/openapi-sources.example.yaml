@@ -1,33 +1,10 @@
-# Posta OpenAPI Aggregator Configuration for liburna-argus
-# Copy this file to your Posta config directory or mount it as a volume
-
+# Local OpenAPI aggregation example.
+# Mounted by deploy/docker-compose/dev.yml; no external services required.
 refreshSeconds: 30
-
 sources:
-  # Ingestion Service - RSS/Atom feed processing
-  - name: ingestion
-    openapiUrl: http://liburna-ingestion:8000/openapi.json
-    pathPrefix: /ingestion
-    componentPrefix: Ingestion
-    operationPrefix: ingestion
-
-  # Extractor Service - Article content extraction
-  - name: extractor
-    openapiUrl: http://liburna-extractor:8000/openapi.json
-    pathPrefix: /extractor
-    componentPrefix: Extractor
-    operationPrefix: extractor
-
-  # Encoder Service - BGE-M3 semantic embeddings
-  - name: encoder
-    openapiUrl: http://liburna-encoder:8000/openapi.json
-    pathPrefix: /encoder
-    componentPrefix: Encoder
-    operationPrefix: encoder
-
-  # Posta Queue API - edge enqueue / jobs (file:// when spec is mounted in aggregator)
   - name: queue-api
     openapiUrl: file:///app/api/openapi.yaml
     pathPrefix: /queue-api
     componentPrefix: QueueAPI
     operationPrefix: queueApi
+

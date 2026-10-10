@@ -1,418 +1,210 @@
-# Posta — Cadmus Internal Developer Guide
-_A reusable, container-first “edge + jobs” stack: Traefik API gateway + Redis-backed **cluster** rate limiting + Asynq task queue._
+# Posta
 
-This repo is meant to be **deployed per-project** (separate servers / namespaces / Redis prefixes) and also to plug into Kubernetes-backed microservice systems.
+**Posta** is a self-hosted Go and Docker stack for accepting background jobs over HTTP, processing them with [Asynq](https://github.com/hibiken/asynq), and aggregating OpenAPI specifications behind a [Traefik](https://traefik.io/traefik/) gateway.
 
----
+It provides a small deployment-oriented foundation rather than a hosted service or a general-purpose application platform. Bring your own task handlers, API services, and operational policies.
 
-## What’s inside
+- **HTTP enqueue API** with registered-task validation, allowed queues, and optional static token authentication
+- **Redis / Asynq workers** for asynchronous task execution and a scheduler for recurring jobs
+- **OpenAPI aggregator** that fetches and merges service specifications at configurable intervals
+- **Traefik gateway** with an optional third-party Redis-backed distributed rate-limit plugin
+- **Docker Compose development and deployment examples** plus Go build and client-generation tooling
 
-### Edge / Gateway
-- **Traefik** as the HTTP entrypoint (`:8080`)
-- **Distributed rate limiting (cluster-wide) via Redis** using Traefik’s built-in `rateLimit` with Redis storage.
+## Why this exists
 
-### Jobs / Background processing
-- **queue-api**: small HTTP service that accepts enqueue requests and pushes tasks into Asynq (Redis)
-- **worker**: Asynq worker server that processes tasks
-- **scheduler**: Asynq scheduler (cron-like) that enqueues periodic tasks
-- **asynqmon**: web UI for monitoring & administrating queues
+Services often need a common way to enqueue work without sharing Redis access or embedding queue conventions in every client. Posta packages a narrow HTTP interface, worker processes, an API-spec aggregator, and gateway configuration so you can operate them together while retaining control of task implementations and infrastructure.
 
-### Local dev
-- `deploy/docker-compose/dev.yml` boots everything: Redis + Traefik + services + asynqmon
+**Scope:** Posta does not include business-specific tasks, user management, tenant isolation, a hosted control plane, or a production security configuration. The bundled `generic` module logs submitted payloads; it is for local demonstration and must not be treated as a production job handler.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  client[Clients / services] --> traefik[Traefik gateway]
-  traefik -->|/v1/enqueue| queueapi[queue-api]
-  scheduler[Scheduler] -->|cron enqueue| redis[(Redis + Asynq)]
-  queueapi -->|enqueue| redis
-  worker[Worker] -->|pull & execute| redis
-  asynqmon[asynqmon UI] -->|inspect| redis
+  Client[HTTP clients] --> Gateway[Traefik gateway]
+  Gateway --> API[queue-api]
+  Gateway --> OpenAPI[OpenAPI aggregator]
+  API --> Redis[(Redis)]
+  Scheduler[scheduler] --> Redis
+  Redis --> Worker[worker]
+  Monitor[asynqmon, development only] --> Redis
+  Specs[Configured service OpenAPI specs] --> OpenAPI
 ```
 
-queue-api and worker share a module-backed registry: the API validates payloads before enqueueing, the worker executes the registered handlers, and the scheduler can enqueue recurring tasks from the same modules.
+| Component | Responsibility | Location |
+| --- | --- | --- |
+| `queue-api` | `POST /v1/enqueue`, `/health`, `/ready`, task and queue validation | `cmd/queue-api/`, `internal/httpapi/` |
+| `worker` | Execute handlers registered by enabled task modules | `cmd/worker/`, `internal/modules/` |
+| `scheduler` | Register and enqueue schedules supplied by modules | `cmd/scheduler/` |
+| `openapi-aggregator` | Refresh, merge, and serve configured OpenAPI sources | `cmd/openapi-aggregator/`, `internal/openapiagg/` |
+| Gateway | Reverse proxy and optional request rate limiting | `gateway/traefik/` |
+| Deployment | Development, CI override, and production-oriented Compose definitions | `deploy/docker-compose/` |
+| API and clients | API contract and TypeScript client examples/generation | `api/`, `clients/`, `scripts/` |
 
----
+Asynq provides **at-least-once delivery**, not exactly-once execution. Handlers should be idempotent and retry-safe.
 
 ## Requirements
 
-- Docker + Docker Compose v2
-- Go toolchain (only needed if you want to run services outside containers)
+- Docker and Docker Compose v2 for the supplied stack
+- Go **1.25.3 or compatible Go 1.25 toolchain** for local builds and tests
+- Optional: curl for health checks and enqueue examples
 
----
+## Quick start: local development
 
-## Quick start (local)
-
-> This skeleton ships **without built-in tasks**. Add at least one module under `internal/modules/` and set `EDGE_MODULES` (comma-separated) for queue-api, worker, and scheduler. Without modules, `/v1/enqueue` will return `unknown_task`.
-
-From repo root:
+The steps below are for a trusted development machine, **not an internet-facing deployment**.
 
 ```bash
-cp .env.example .env  # adjust tokens/secrets for your environment
-chmod +x ./run.sh
-./run.sh -c "up --build"
+git clone https://github.com/cadmus-group/posta.git
+cd posta
+cp .env.example .env
+docker network inspect posta-network >/dev/null 2>&1 || docker network create posta-network
+./run.sh -c "up -d --build"
 ```
 
-### Local endpoints
-- **Gateway (Traefik)**: `http://localhost:8080`
-- **Health** (through gateway → queue-api): `http://localhost:8080/health`
-- **Readiness** (Redis ping): `http://localhost:8080/ready`
-- **Aggregated templates**: `http://localhost:8080/openapi.json`
-- **asynqmon UI**: `http://localhost:8082`
-- **Redis**: `localhost:6379` (exposed for debugging)
+The development Compose file uses the pre-existing external Docker network `posta-network`. The default example has no Redis password and no enqueue token; keep the stack local. It enables `EDGE_MODULES=generic` so you can exercise the API with a demonstration task.
 
-### Enqueue a task (through Traefik)
-Replace the `type`/`queue` values with one of your registered modules.
+| Endpoint | Development URL |
+| --- | --- |
+| Queue API liveness | http://localhost:8080/queue-api/health |
+| Queue API readiness (Redis ping) | http://localhost:8080/queue-api/ready |
+| Enqueue endpoint | http://localhost:8080/queue-api/v1/enqueue |
+| Merged OpenAPI document | http://localhost:8080/openapi.json |
+| OpenAPI source status | http://localhost:8080/sources |
+| Asynq dashboard (development only) | http://localhost:8082 |
+
+The gateway has a `/queue-api` prefix and strips it before forwarding to `queue-api`. Calling `/v1/enqueue` directly **on the gateway** is not the configured route. The root path redirects to the queue API health route.
+
+Try the included demonstration handler:
+
 ```bash
-curl -sS http://localhost:8080/v1/enqueue \
-  -H 'content-type: application/json' \
-  # add: -H "X-Edge-Token: <token>" if ENQUEUE_AUTH_TOKEN is set
-  -d '{"type":"billing:sync","queue":"default","payload":{"accountId":"acc_123"}}'
+curl -i http://localhost:8080/queue-api/health
+curl -i -X POST http://localhost:8080/queue-api/v1/enqueue \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"generic","queue":"default","payload":{"message":"hello"}}'
+docker compose -f deploy/docker-compose/dev.yml logs -f worker
 ```
 
----
+You should see an enqueue response containing a task ID and queue, followed by a worker log entry. **Do not enqueue secrets or personal data** to the `generic` handler: it logs payload contents. If you set `ENQUEUE_AUTH_TOKEN` in `.env`, include `-H 'X-Edge-Token: <your-token>'` in enqueue requests.
 
-## How to use this in other projects
+Stop the stack with `./run.sh -c "down"`. To remove local Redis data as well, use `./run.sh -c "down -v"`.
 
-You have two integration patterns. Pick one; don’t mix randomly.
+### Build and test without Compose
 
-### Pattern A (recommended): Treat this repo as an external “jobs service”
-Other services enqueue work by calling `queue-api` through the gateway.
-
-**Pros**
-- Language-agnostic (any service can enqueue)
-- Central policy enforcement (auth, rate limiting, auditing, tenant rules)
-- No Redis credentials spread across your microservices
-
-**Cons**
-- You must secure `queue-api` (do **not** expose public enqueue without auth)
-
-**How**
-- Deploy this stack (or just queue-api+worker+scheduler) into your environment
-- Internal services call `POST /v1/enqueue`
-
-Recommended: keep `queue-api` on a **private network** (or protected by JWT/mTLS at the gateway).
-
----
-
-### Pattern B (Go-only): Enqueue directly to Asynq (no HTTP hop)
-A Go service imports Asynq and enqueues tasks directly to Redis.
-
-**Pros**
-- Fewer moving parts
-- Lower latency
-
-**Cons**
-- Every service needs Redis connectivity + consistent queue/task conventions
-- Harder to govern and audit
-
-**Rule:** if we ever allow Pattern B, we will create a `pkg/queueclient` (public) package and **never** import from `internal/` across repos.
-
----
-
-## How templates auto-work (OpenAPI aggregation)
-- Each microservice owns its enqueue endpoints and ships an OpenAPI doc at `/openapi.json` that includes schemas/examples for those endpoints.
-- `openapi-aggregator` reads `config/openapi-sources.yaml`, fetches each service spec on a timer, prefixes paths and component names per service, and serves a merged `GET /openapi.json` (and `GET /sources` for debugging).
-- Traefik routes `/openapi.json` to the aggregator; it **does not** proxy enqueue calls—those stay routed to the owning microservice path prefixes.
-- If one source is down, the aggregator keeps serving the last good merged doc and exposes the failure in `/sources`; `/ready` becomes 503 until the next successful refresh.
-
-### Microservice contract requirements
-- Serve OpenAPI at `/openapi.json` (JSON or YAML).
-- Use a stable base path (recommended: `/service-name/...` or `/service-name/enqueue/...`) to avoid collisions; the aggregator requires a `pathPrefix` per service.
-- Include schemas/examples for request bodies and responses so clients can build templates automatically.
-- Keep operationIds unique inside the service; the aggregator will prefix them if collisions occur.
-
-### Linking a new microservice
-1) Add a Traefik rule (file provider, Ingress, or mesh) that routes the service’s base path through the gateway.
-2) Add the service to `config/openapi-sources.yaml` (or point `OPENAPI_SOURCES_FILE` to another file):
-   ```yaml
-   refreshSeconds: 30
-   sources:
-     - name: billing
-       openapiUrl: http://billing:8080/openapi.json
-       pathPrefix: /billing
-       componentPrefix: Billing
-       operationPrefix: Billing
-   ```
-3) Restart `openapi-aggregator` or let it pick up changes on the next refresh.
-- `openapiUrl` accepts `http(s)` or `file://` (dev example uses `file://` to read the repo’s sample specs).
-
-### Frontend integration
-- Fetch `GET /openapi.json` via the gateway to render enqueue templates or generate clients.
-- Call enqueue endpoints through the gateway using the path prefixes defined in the OpenAPI document (e.g., `POST /billing/enqueue/...`).
-- Cache if you want, but the aggregator already refreshes periodically; rely on ETag/Last-Modified if your HTTP client supports it.
-
----
-
-## Task model + reliability expectations
-
-Asynq is an **at-least-once** processing system. Tasks may run more than once.
-Write handlers to be:
-- **Idempotent**
-- Safe to retry
-- Defensive with timeouts
-
-Do not put irreversible side effects without idempotency keys (e.g., “charge card” must be deduped).
-
----
-
-## Authoring task modules
-
-Task types, validators, handlers, and schedules live in **modules** loaded at startup. queue-api uses the registry to validate payloads before enqueueing; worker uses the same registry to dispatch handlers; scheduler loads the same modules to register recurring tasks.
-
-1. Create a package under `modules/<name>/` with `Register` (and optionally `RegisterSchedules`).
-2. Add an entry to `moduleCatalog` in `internal/modules/loader.go` pointing at your module.
-3. Set `EDGE_MODULES=<name>[,<name2>...]` for queue-api, worker, and scheduler. Optionally tighten with `EDGE_ALLOWED_TASK_TYPES`.
-
-Example module (`modules/billing/register.go`):
-
-```go
-package billing
-
-import (
-  "context"
-  "encoding/json"
-  "errors"
-  "log/slog"
-
-  "github.com/hibiken/asynq"
-
-  "github.com/cadmus-group/posta/internal/queue"
-)
-
-const TypeBillingSync = "billing:sync"
-
-func Register(log *slog.Logger, reg *queue.Registry) error {
-  reg.MustRegister(queue.TaskSpec{
-    Type: TypeBillingSync,
-    Validate: func(payload json.RawMessage) error {
-      var p struct {
-        AccountID string `json:"accountId"`
-      }
-      if err := json.Unmarshal(payload, &p); err != nil || p.AccountID == "" {
-        return errors.New("accountId required")
-      }
-      return nil
-    },
-    Handler: func(ctx context.Context, t *asynq.Task) error {
-      log.Info("billing sync", "payload", string(t.Payload()))
-      return nil
-    },
-  })
-  return nil
-}
+```bash
+go test ./...
+go vet ./...
+make build
 ```
 
-Register it in `internal/modules/loader.go`:
+Run individual binaries using `go run ./cmd/queue-api`, `go run ./cmd/worker`, `go run ./cmd/scheduler`, or `go run ./cmd/openapi-aggregator` after configuring access to Redis and the required OpenAPI source file. They do not automatically start dependencies.
 
-```go
-var moduleCatalog = map[string]moduleSpec{
-  "billing": {registerTasks: billing.Register},
-}
+### Task modules
+
+The default module catalog currently registers `generic` (see `internal/modules/loader.go`). Set `EDGE_MODULES` consistently for the API, worker, and scheduler; unknown module names fail at startup. To implement real jobs:
+
+1. Define validators and Asynq handlers in a module package using `queue.TaskSpec` (see `internal/modules/generic/register.go`).
+2. Register that module in `internal/modules/loader.go` and add optional schedule registration if needed.
+3. Enable its name through `EDGE_MODULES` in each relevant service; use `EDGE_ALLOWED_TASK_TYPES` to narrow allowed registered task types.
+4. Test validation, idempotency, retries, and any external side effects.
+
+The `internal/` Go packages are not a cross-repository public API. External services can use the documented HTTP contract instead of importing them.
+
+### Calling the API from another service
+
+Clients may call `POST /v1/enqueue` directly on the queue-api service *within a private network*, or `POST /queue-api/v1/enqueue` through the supplied Traefik gateway. The optional token accepts `X-Edge-Token` or `Authorization: Bearer <token>`; this is a **static shared token**, not JWT validation. Unrecognized task types return an `unknown_task` error.
+
+The canonical request and response schemas are in [api/openapi.yaml](api/openapi.yaml). A minimal TypeScript fetch client is in [clients/ts/minimal.ts](clients/ts/minimal.ts); pass a gateway base URL ending in `/queue-api` when using the provided route. See [clients/README.md](clients/README.md) for client generation.
+
+## OpenAPI aggregation
+
+The aggregator reads `OPENAPI_SOURCES_FILE` (normally `config/openapi-sources.yaml`), fetches each configured HTTP(S) or local-file source, and serves merged documentation through `/openapi.json`. Each source requires a distinct `pathPrefix`; optional component and operation prefixes avoid naming collisions.
+
+The development example at [config/openapi-sources.example.yaml](config/openapi-sources.example.yaml) uses the mounted local Posta API specification, so it does not require other projects to be running. For another service, add an entry such as:
+
+```yaml
+refreshSeconds: 30
+sources:
+  - name: queue-api
+    openapiUrl: file:///app/api/openapi.yaml
+    pathPrefix: /queue-api
+    componentPrefix: QueueAPI
+    operationPrefix: queueApi
+  - name: example-service
+    openapiUrl: http://example-service:8080/openapi.json
+    pathPrefix: /example
+    componentPrefix: Example
+    operationPrefix: example
 ```
 
-If your module exposes `RegisterSchedules`, the scheduler will call it so you can enqueue periodic tasks.
-
----
+Ensure external sources are reachable **from the aggregator container**; mounting a local file or adding a source does not automatically create a matching gateway route. If a source fails, the service may continue serving the last successful merged document, while `/sources` reports failures and aggregator readiness may become unhealthy. `OPENAPI_REFRESH_SECONDS` can override the refresh interval.
 
 ## Configuration
 
-### Environment variables (services)
+Copy [`.env.example`](.env.example) and adjust environment values. Service-specific variants (`QUEUE_API_`, `WORKER_`, `SCHEDULER_`) override shared values in the Go binaries.
 
-Copy `.env.example` to `.env` and adjust for your environment. The defaults are safe for local dev; production should set Redis auth and an enqueue auth token. Each binary reads both unprefixed variables and service-prefixed variants (`QUEUE_API_`, `WORKER_`, `SCHEDULER_`); prefixed values win.
-
-Used by `queue-api`, `worker`, `scheduler`:
-
-| Variable | Default | Notes |
-|---|---:|---|
-| `REDIS_ADDR` | `redis:6379` | Redis host:port |
-| `REDIS_PASSWORD` | empty | Set if Redis requires auth |
-| `REDIS_DB` | `0` | Redis DB index |
-| `REDIS_DIAL_TIMEOUT_MS` | `2000` | Redis dial timeout (ms) |
-| `REDIS_READ_TIMEOUT_MS` | `1000` | Redis read timeout (ms) |
-| `REDIS_WRITE_TIMEOUT_MS` | `1000` | Redis write timeout (ms) |
-| `EDGE_MODULES` | empty | Comma-separated module names to load; required to have any tasks |
-| `EDGE_ALLOWED_TASK_TYPES` | empty | Optional allowlist filter applied after modules load (affects queue-api validation, worker handlers, scheduler registrations) |
-| `EDGE_ALLOWED_QUEUES` | `default,critical` | Allowed queues for enqueue API (alias for `QUEUE_ALLOWLIST`) |
-
-queue-api:
-
-| Variable | Default | Notes |
-|---|---:|---|
-| `HTTP_ADDR` | `:8081` | Bind address |
-| `HTTP_MAX_BODY_BYTES` | `1048576` | Request size limit |
-| `HTTP_READ_HEADER_TIMEOUT_MS` | `5000` | Defensive timeout |
-| `ENQUEUE_AUTH_TOKEN` | empty | If set, /v1/enqueue requires `X-Edge-Token` (or `Authorization: Bearer ...`) |
-| `QUEUE_ALLOWLIST` | `default,critical` | Allowed queues for enqueue API (falls back to `EDGE_ALLOWED_QUEUES`) |
-| `REDIS_PING_TIMEOUT_MS` | `1500` | Timeout for readiness Redis ping |
-
-worker:
-
-| Variable | Default | Notes |
-|---|---:|---|
+| Variable | Default in Go | Meaning |
+| --- | --- | --- |
+| `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB` | `redis:6379` / empty / `0` | Redis connectivity |
+| `EDGE_MODULES` | empty | Comma-separated module names |
+| `EDGE_ALLOWED_TASK_TYPES` | empty | Optional task type allowlist after loading modules |
+| `EDGE_ALLOWED_QUEUES` or `QUEUE_ALLOWLIST` | `default,critical` | Enqueue API queue allowlist (see config precedence) |
+| `QUEUE_DEFAULT` / `QUEUE_CRITICAL` | `default` / `critical` | Worker queue names |
+| `QUEUE_WEIGHT_DEFAULT` / `QUEUE_WEIGHT_CRITICAL` | `5` / `10` | Worker polling weights |
 | `ASYNQ_CONCURRENCY` | `20` | Worker concurrency |
-| `QUEUE_DEFAULT` | `default` | Queue name |
-| `QUEUE_CRITICAL` | `critical` | Queue name |
-| `QUEUE_WEIGHT_DEFAULT` | `5` | Weighted polling |
-| `QUEUE_WEIGHT_CRITICAL` | `10` | Weighted polling |
+| `HTTP_ADDR` | `:8081` | Queue API bind address; aggregator uses `:8083` |
+| `HTTP_MAX_BODY_BYTES` | `1048576` | Enqueue HTTP request body limit |
+| `HTTP_READ_HEADER_TIMEOUT_MS` | `5000` | Queue API read-header timeout |
+| `ENQUEUE_AUTH_TOKEN` | empty | Enables shared-token authentication when nonempty |
+| `REDIS_DIAL_TIMEOUT_MS` | `2000` | Redis dial timeout |
+| `REDIS_READ_TIMEOUT_MS` / `REDIS_WRITE_TIMEOUT_MS` | `1000` / `1000` | Redis I/O timeouts |
+| `REDIS_PING_TIMEOUT_MS` | `1500` | Readiness ping timeout |
+| `OPENAPI_SOURCES_FILE` | `config/openapi-sources.yaml` | Aggregator config path |
+| `OPENAPI_REFRESH_SECONDS` | from YAML (30s in example) | Optional aggregator refresh override |
 
----
+The API checks `EDGE_ALLOWED_QUEUES` before `QUEUE_ALLOWLIST` when both are configured, and supports the alias `QUEUE_API_AUTH_TOKEN` for the shared token. Compose can explicitly forward environment variables, so inspect the selected Compose file when overriding service values.
 
-## Rate limiting (cluster-wide, Redis-backed)
+## Deployment boundaries
 
-Traefik’s built-in `rateLimit` middleware is configured to store counters in Redis so limits stay consistent across replicas.
+### Local development
 
-### Where to configure it
-- `gateway/traefik/traefik.yml` — static config
-- `gateway/traefik/dynamic.yml` — routes and middleware config (rate limit, redis address)
+Use `deploy/docker-compose/dev.yml` with a trusted local Docker host. It exposes Redis on port 6379 and the Asynq monitoring UI on port 8082, and neither is suitable for public access. The development Redis container **does not enforce** `REDIS_PASSWORD` simply because that environment variable is set.
 
-### Tuning
-Edit `gateway/traefik/dynamic.yml` and adjust:
-- `average`
-- `burst`
-- optional `sourceCriterion` (recommended: limit by API key header, not IP)
+### Example server deployment
 
-**Highly recommended**: rate limit by a stable identity (e.g., `Authorization` header or `X-Api-Key`) rather than IP.
-If you rate-limit by IP behind load balancers, you’ll often rate-limit your LB instead of the client unless configured carefully.
+`deploy/docker-compose/prod.yml` is a starting point, **not a secure production distribution**. It runs Traefik on ports 80/443, Redis inside the Compose network, the Go services, and the OpenAPI aggregator. From the repository root:
 
----
-
-## Local testing checklist
-
-### 1) Everything up
-```bash
-./run.sh -c "up --build"
-```
-
-### 2) Health works
-```bash
-curl -i http://localhost:8080/health
-```
-
-### 3) Rate limiter works (you should see 429 after you exceed limits)
-```bash
-for i in {1..100}; do
-  curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/health
-done | sort | uniq -c
-```
-
-### 4) Queue works
-```bash
-curl -sS http://localhost:8080/v1/enqueue \
-  -H 'content-type: application/json' \
-  -d '{"type":"billing:sync","queue":"default","payload":{"accountId":"acc_123"}}'
-```
-
-Open: `http://localhost:8082`
-
-### 5) Automated smoke test
-```bash
-chmod +x scripts/smoke.sh
-./run.sh -c "up -d"
-./scripts/smoke.sh
-```
-
----
-
-## Deploying (containers) — per project server (VPS / bare metal)
-
-### Build images (optional if not pulling from registry)
-```bash
-docker build -f Dockerfile.queue-api -t ghcr.io/<org>/edge-stack-queue-api:<tag> .
-docker build -f Dockerfile.worker    -t ghcr.io/<org>/edge-stack-worker:<tag> .
-docker build -f Dockerfile.scheduler -t ghcr.io/<org>/edge-stack-scheduler:<tag> .
-docker build -f Dockerfile.openapi-aggregator -t ghcr.io/<org>/edge-stack-openapi-aggregator:<tag> .
-```
-
-### Deploy on a server with docker compose
 ```bash
 cp .env.example .env
-# set REDIS_ADDR/REDIS_PASSWORD, ENQUEUE_AUTH_TOKEN, domains, and path prefixes
 cp config/openapi-sources.example.yaml config/openapi-sources.yaml
-# edit config/openapi-sources.yaml for your services (pathPrefix required)
+# Edit .env, OpenAPI sources, gateway routes, hostname/TLS configuration and Redis credentials.
 ./run.sh -f deploy/docker-compose/prod.yml -c "up -d --build"
 ```
-- Traefik listens on :80/:443 and routes `/openapi.json` to the aggregator and `/` to `queue-api`.
-- Keep Redis internal (only exposed via the Docker network). Point `REDIS_ADDR` to a managed instance if available.
-- Place Traefik behind your existing LB or let it manage TLS via ACME (set `LETS_ENCRYPT_EMAIL` in `.env`).
 
-### Linking external microservices in prod
-- Microservices can run outside this compose file as long as they are reachable from the Traefik/OpenAPI network (same Docker network or private LAN/VPC).
-- Add each service to `config/openapi-sources.yaml` with `openapiUrl` and `pathPrefix`; restart `openapi-aggregator` or let it refresh.
-- Add matching Traefik rules (file provider or Kubernetes Ingress) to route the chosen `pathPrefix` to the target service.
+The example configuration includes routes for application-specific integrations (`fleet-*` and `liburna-*`), whose services are **not** provided by this repository. Review or replace those gateway routes for your own environment; do not assume the bundled gateway is a standalone production edge configuration. The production Compose file references a separate, untracked `config/openapi-sources.yaml` file.
 
----
+### Production assumptions and private infrastructure
 
-## Deploying (Kubernetes)
+Before exposing any endpoint, operators are responsible for configuring TLS, network policies, gateway authentication, Redis credentials, trusted proxy settings, token rotation, persistent data, backups, monitoring, rate-limit policy, and access to task queues. Never publish Redis or the Asynq dashboard. Keep the enqueue API private wherever possible. Run only one scheduler replica unless duplicate scheduling is explicitly acceptable or coordinated.
 
-### Recommended K8s shape
-- Use the cluster’s existing Traefik (Ingress Controller) OR deploy Traefik as part of this stack
-- Deploy:
-  - `queue-api` (Deployment + Service)
-  - `worker` (Deployment; scale horizontally)
-  - `scheduler` (Deployment; keep at 1 unless you implement leader election)
-  - `asynqmon` (optional; internal-only)
-- Use managed Redis if possible
+The included rate limiter is the **third-party** `github.com/nzin/traefik-cluster-ratelimit` Traefik plugin, not Traefik's built-in middleware. It is configured for the `/queue-api` route in `gateway/traefik/dynamic.yml`. Review plugin compatibility, Redis credentials, and configuration interpolation for your environment before relying on it; additional gateway routes are not automatically rate-limited.
 
-### Scaling rules
-- Scale **workers** for throughput.
-- Keep **scheduler** at 1 replica (unless you implement leader election, otherwise you’ll double-enqueue).
-- If you run multiple Traefik replicas, keep rate limiting **Redis-backed** to prevent per-pod unfairness.
+Kubernetes deployments can use the same Go images with your own Deployments, Services, and ingress configuration. This repository does **not** ship a Kubernetes manifest or Helm chart.
 
-### Project isolation (multi-project in one cluster)
-Pick one:
-- Separate namespaces + separate Redis instances (best)
-- Shared Redis with **strict key prefixes** (acceptable if you’re disciplined)
-- Separate Redis for rate limit state vs queue data (recommended)
+## CI, releases, and development workflow
 
----
-
-## Security (do not ignore this)
-
-Out of the box, this skeleton is intentionally minimal.
-
-Before production:
-- Put `queue-api` behind auth (use `ENQUEUE_AUTH_TOKEN` for a simple token gate; prefer JWT/mTLS/API keys in production)
-- Rate limit by tenant key, not IP
-- Validate task types and payload schema (whitelist allowed types — enforced in `/v1/enqueue`)
-- Apply network policies so only internal services can enqueue
-- Log and audit enqueue calls (request-id, tenant-id, task type)
-
----
+GitHub Actions runs `go test ./...`, `go vet ./...`, and a Compose smoke test on pull requests and pushes to `main`. Releases use release-please and publish versioned GHCR images for **queue-api**, **worker**, and **scheduler** on GitHub release publication. The OpenAPI aggregator has a Dockerfile but is **not currently published** by that workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for PR guidance.
 
 ## Troubleshooting
 
-### Traefik rate limit not applying
-```bash
-./run.sh -c "logs -f traefik"
-```
+- **404 at gateway enqueue endpoint:** use `/queue-api/v1/enqueue`, not `/v1/enqueue` on port 8080.
+- **`unknown_task`:** ensure the requested task type is registered and its module is enabled in all relevant processes.
+- **401 enqueue response:** configure the matching `ENQUEUE_AUTH_TOKEN` and send `X-Edge-Token` or a Bearer static token.
+- **Redis readiness failure:** inspect `REDIS_ADDR`, password configuration, container logs, and the selected Compose network.
+- **`/sources` reports failures:** check container DNS, service reachability, mounts, and `pathPrefix` configuration.
+- **No 429 responses:** check the gateway route and third-party rate-limit plugin; the HTTP service does not perform gateway-level rate limiting itself.
 
-### asynqmon not connecting to Redis
-- Confirm Redis is reachable from the container and address matches `--redis-addr`.
-- Check logs:
-```bash
-docker compose -f deploy/docker-compose/dev.yml logs -f asynqmon
-```
+## Community and license
 
-### Tasks stuck / retrying
-- Open asynqmon → inspect task payload and error
-- Fix handler idempotency/timeouts
-- Increase worker concurrency only after verifying Redis + downstream services can handle the load
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md) before filing an issue or opening a PR.
 
----
+Released under the [MIT License](LICENSE). The repository path and copyright attribution remain with their original owner; using Posta does not require being part of that organization.
 
-## Dev standards (Cadmus internal)
-- Keep handlers small and composable.
-- Prefer deterministic task payload schemas.
-- Any side effect must be idempotent.
-- For cross-project reuse: keep “public” packages in `pkg/` (create later), not `internal/`.
-
----
-
-## Roadmap (next hardening steps)
-- [x] Add auth + tenant enforcement to queue-api (token gate)
-- [x] Add request validation/whitelist for task types
-- [ ] Add Prometheus metrics + dashboards
-- [ ] Add tracing (OpenTelemetry)

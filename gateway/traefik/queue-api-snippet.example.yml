@@ -1,0 +1,24 @@
+# Example entries for a separate Traefik file-provider configuration.
+# Merge each section below into the matching http.* section of your own dynamic config.
+# Ensure queue-api is reachable as http://queue-api:8081 on the proxy's Docker network.
+
+# Under http.routers:
+# queue-api:
+#   rule: "PathPrefix(`/queue-api`)"
+#   entryPoints: ["web"]
+#   service: queue-api
+#   middlewares: ["strip-queue-api"]
+
+# Under http.services:
+# queue-api:
+#   loadBalancer:
+#     servers:
+#       - url: "http://queue-api:8081"
+
+# Under http.middlewares:
+# strip-queue-api:
+#   stripPrefix:
+#     prefixes: ["/queue-api"]
+
+# This is a reference snippet, not a standalone Traefik configuration.
+

@@ -13,7 +13,7 @@ docker run --rm -v "${ROOT_DIR}:/local" "${IMAGE}" generate \
 	-i /local/api/openapi.yaml \
 	-g typescript-fetch \
 	-o /local/clients/typescript-fetch \
-	--additional-properties npmName=@cadmus/posta-queue-client,npmVersion=0.1.0,supportsES6=true \
+	--additional-properties npmName=posta-queue-client,npmVersion=0.1.0,supportsES6=true \
 	--skip-validate-spec
 
 echo "done; output written to ${OUT}"

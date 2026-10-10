@@ -1,5 +1,5 @@
 #!/bin/bash
-# filepath: /home/arbion/Dev/posta/run-dev.sh
+# Docker Compose convenience wrapper; run from the repository root.
 
 # Default values
 COMPOSE_FILE="./deploy/docker-compose/dev.yml"
