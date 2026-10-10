@@ -1,23 +1,20 @@
 #!/usr/bin/env bash
-# Run this ON THE SERVER (e.g. in SSH) to see what queue-api and the gateway actually return.
+# Diagnose the public gateway path without printing credentials.
 # Usage: ./scripts/check-queue-api-server.sh
+# Optional: GATEWAY_URL=http://localhost:8080 DIRECT_URL=http://localhost:8081
+set -euo pipefail
 
-set -e
-echo "=== 1. Direct queue-api (port 8081) ==="
-echo "GET /health:"
-curl -s -w "\nHTTP %{http_code}\n" http://localhost:8081/health || true
-echo ""
-echo "POST /v1/enqueue (no auth, expect 400 invalid json or 401 if auth enabled):"
-curl -s -w "\nHTTP %{http_code}\n" -X POST http://localhost:8081/v1/enqueue -H "Content-Type: application/json" -d '{}' || true
+GATEWAY_URL="${GATEWAY_URL:-http://localhost:8080}"
+echo "== Gateway queue-api liveness =="
+curl -sS -i "${GATEWAY_URL%/}/queue-api/health" || true
+echo
+echo "== Gateway enqueue validation (no credentials) =="
+echo "Expect 400 if auth is disabled, 401 if auth is configured."
+curl -sS -i -X POST "${GATEWAY_URL%/}/queue-api/v1/enqueue" \
+  -H "Content-Type: application/json" -d '{}' || true
+echo
 
-echo ""
-echo "=== 2. Via Traefik gateway (port 8090) ==="
-echo "GET /queue-api/health:"
-curl -s -w "\nHTTP %{http_code}\n" http://localhost:8090/queue-api/health || true
-echo ""
-echo "POST /queue-api/v1/enqueue (no auth):"
-curl -s -w "\nHTTP %{http_code}\n" -X POST http://localhost:8090/queue-api/v1/enqueue -H "Content-Type: application/json" -d '{}' || true
-
-echo ""
-echo "=== 3. Queue-api container env (auth disabled if ENQUEUE_AUTH_TOKEN empty/unset) ==="
-docker exec queue-api env 2>/dev/null | grep -E "ENQUEUE_AUTH|QUEUE_API" || echo "(container not found or no match)"
+if [[ -n "${DIRECT_URL:-}" ]]; then
+  echo "== Direct queue-api liveness (requires an explicitly reachable service port) =="
+  curl -sS -i "${DIRECT_URL%/}/health" || true
+fi
